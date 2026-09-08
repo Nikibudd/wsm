@@ -215,6 +215,9 @@ function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean })
       <Text color={selected ? "black" : "white"} backgroundColor={selected ? "cyan" : undefined}>
         {selected ? "› " : "  "}
         {item.name} <Text color={selected ? "black" : typeColor}>[{item.type}]</Text>
+        {item.side ? (
+          <Text color={selected ? "black" : "cyan"}> [{item.side}]</Text>
+        ) : null}
       </Text>
       <Text dimColor>{"    "}launch: {item.launch}</Text>
       <Text dimColor>{"    "}close:  {closeLabel}</Text>
@@ -264,7 +267,15 @@ function ItemPane({
       <Text bold underline color={active ? "cyan" : "white"}>
         {workspace.name}
       </Text>
-      <Text dimColor>cwd: {workspace.cwd ?? "(none set — items use their own or home dir)"}</Text>
+      <Text dimColor>group: {workspace.group ?? UNGROUPED}</Text>
+      {workspace.layout === "split" ? (
+        <>
+          <Text dimColor>frontend: {workspace.frontendCwd ?? "(not set)"}</Text>
+          <Text dimColor>backend:  {workspace.backendCwd ?? "(not set)"}</Text>
+        </>
+      ) : (
+        <Text dimColor>cwd: {workspace.cwd ?? "(none set — items use their own or home dir)"}</Text>
+      )}
       <Box height={1} />
       {workspace.items.length === 0 ? (
         <Text dimColor>No items yet. Press "a" to add one (editor, terminal, docker, ...).</Text>
@@ -470,10 +481,19 @@ export function App() {
         <WorkspaceForm
           existingNames={config.workspaces.map((w) => w.name)}
           presetGroup={overlay.presetGroup}
-          onSubmit={(name, cwd, group) => {
+          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+            const workspace: Workspace = {
+              name,
+              group: group || undefined,
+              layout: layout === "split" ? "split" : undefined,
+              cwd: layout === "single" ? cwd || undefined : undefined,
+              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
+              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
+              items: [],
+            };
             setConfig((prev) => ({
               ...prev,
-              workspaces: [...prev.workspaces, { name, cwd: cwd || undefined, group: group || undefined, items: [] }],
+              workspaces: [...prev.workspaces, workspace],
             }));
             pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
@@ -488,12 +508,15 @@ export function App() {
         <WorkspaceForm
           existing={workspace}
           existingNames={config.workspaces.map((w) => w.name)}
-          onSubmit={(name, cwd, group) => {
+          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
             mutateWorkspace(overlay.workspaceName, (w) => ({
               ...w,
               name,
-              cwd: cwd || undefined,
               group: group || undefined,
+              layout: layout === "split" ? "split" : undefined,
+              cwd: layout === "single" ? cwd || undefined : undefined,
+              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
+              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
             }));
             pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
@@ -509,6 +532,7 @@ export function App() {
       overlayNode = workspace ? (
         <ItemForm
           existing={existing}
+          isSplit={workspace.layout === "split"}
           onSubmit={(item) => {
             mutateWorkspace(overlay.workspaceName, (w) => {
               const items = [...w.items];
