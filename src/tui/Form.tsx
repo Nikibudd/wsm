@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { ItemType, Workspace, WorkspaceItem } from "../types.js";
+import type { ItemSide, ItemType, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
 
 export interface FieldOption {
   label: string;
@@ -179,10 +179,12 @@ export function Form({
 
 export function ItemForm({
   existing,
+  isSplit,
   onSubmit,
   onCancel,
 }: {
   existing?: WorkspaceItem;
+  isSplit: boolean;
   onSubmit: (item: WorkspaceItem) => void;
   onCancel: () => void;
 }) {
@@ -190,6 +192,7 @@ export function ItemForm({
     name: existing?.name ?? "",
     type: existing?.type ?? "app",
     launch: existing?.launch ?? "",
+    side: existing?.side ?? "frontend",
     cwd: existing?.cwd ?? "",
     closeStrategy: existing?.closeAppName
       ? "app"
@@ -222,19 +225,35 @@ export function ItemForm({
         kind: "text",
         placeholder: values.type === "app" ? "open -a Ghostty" : "docker compose up -d",
       },
-      { key: "cwd", label: "Directory", kind: "text", placeholder: "(workspace default)" },
-      {
-        key: "closeStrategy",
-        label: "Close via",
+    ];
+    if (isSplit) {
+      base.push({
+        key: "side",
+        label: "Side",
         kind: "select",
         options: [
-          { label: "Quit macOS app", value: "app" },
-          { label: "Custom command", value: "command" },
-          { label: "Kill process", value: "process" },
-          { label: "Leave running", value: "none" },
+          { label: "Frontend", value: "frontend" },
+          { label: "Backend", value: "backend" },
         ],
-      },
-    ];
+      });
+    }
+    base.push({
+      key: "cwd",
+      label: "Directory",
+      kind: "text",
+      placeholder: isSplit ? "(frontend/backend default)" : "(workspace default)",
+    });
+    base.push({
+      key: "closeStrategy",
+      label: "Close via",
+      kind: "select",
+      options: [
+        { label: "Quit macOS app", value: "app" },
+        { label: "Custom command", value: "command" },
+        { label: "Kill process", value: "process" },
+        { label: "Leave running", value: "none" },
+      ],
+    });
     if (values.closeStrategy === "app") {
       base.push({
         key: "closeAppName",
@@ -253,7 +272,7 @@ export function ItemForm({
     }
     base.push({ key: "delayMs", label: "Delay (ms)", kind: "text", placeholder: "0" });
     return base;
-  }, [values.type, values.closeStrategy]);
+  }, [values.type, values.closeStrategy, isSplit]);
 
   const handleSubmit = () => {
     if (!values.name.trim()) {
@@ -273,6 +292,7 @@ export function ItemForm({
       type: values.type as ItemType,
       launch: values.launch.trim(),
     };
+    if (isSplit) item.side = values.side as ItemSide;
     if (values.cwd.trim()) item.cwd = values.cwd.trim();
     if (values.closeStrategy === "app" && values.closeAppName.trim()) {
       item.closeAppName = values.closeAppName.trim();
@@ -301,6 +321,15 @@ export function ItemForm({
   );
 }
 
+export interface WorkspaceFormResult {
+  name: string;
+  group: string;
+  layout: WorkspaceLayout;
+  cwd: string;
+  frontendCwd: string;
+  backendCwd: string;
+}
+
 export function WorkspaceForm({
   existing,
   existingNames,
@@ -311,21 +340,43 @@ export function WorkspaceForm({
   existing?: Workspace;
   existingNames: string[];
   presetGroup?: string;
-  onSubmit: (name: string, cwd: string, group: string) => void;
+  onSubmit: (result: WorkspaceFormResult) => void;
   onCancel: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({
     group: existing?.group ?? presetGroup ?? "",
     name: existing?.name ?? "",
+    layout: existing?.layout ?? "single",
     cwd: existing?.cwd ?? "",
+    frontendCwd: existing?.frontendCwd ?? "",
+    backendCwd: existing?.backendCwd ?? "",
   });
   const [error, setError] = useState("");
 
-  const fields: FieldDef[] = [
-    { key: "group", label: "Group", kind: "text", placeholder: "e.g. Work (blank = Ungrouped)" },
-    { key: "name", label: "Name", kind: "text", placeholder: "e.g. acme-api" },
-    { key: "cwd", label: "Directory", kind: "text", placeholder: "~/dev/acme-api" },
-  ];
+  const fields = useMemo<FieldDef[]>(() => {
+    const base: FieldDef[] = [
+      { key: "group", label: "Group", kind: "text", placeholder: "e.g. Work (blank = Ungrouped)" },
+      { key: "name", label: "Name", kind: "text", placeholder: "e.g. acme-api" },
+      {
+        key: "layout",
+        label: "Layout",
+        kind: "select",
+        options: [
+          { label: "Single project folder", value: "single" },
+          { label: "Split frontend/backend", value: "split" },
+        ],
+      },
+    ];
+    if (values.layout === "split") {
+      base.push(
+        { key: "frontendCwd", label: "Frontend dir", kind: "text", placeholder: "~/dev/acme-web" },
+        { key: "backendCwd", label: "Backend dir", kind: "text", placeholder: "~/dev/acme-api" },
+      );
+    } else {
+      base.push({ key: "cwd", label: "Directory", kind: "text", placeholder: "~/dev/acme-api" });
+    }
+    return base;
+  }, [values.layout]);
 
   const handleSubmit = () => {
     const name = values.name.trim();
@@ -337,7 +388,14 @@ export function WorkspaceForm({
       setError("A workspace with that name already exists");
       return;
     }
-    onSubmit(name, values.cwd.trim(), values.group.trim());
+    onSubmit({
+      name,
+      group: values.group.trim(),
+      layout: values.layout as WorkspaceLayout,
+      cwd: values.cwd.trim(),
+      frontendCwd: values.frontendCwd.trim(),
+      backendCwd: values.backendCwd.trim(),
+    });
   };
 
   return (

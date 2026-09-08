@@ -5,8 +5,12 @@ import { loadConfig, findWorkspace } from "./config.js";
 import type { Session, SessionItem, Workspace, WorkspaceItem } from "./types.js";
 
 function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
-  const raw = item.cwd ?? workspace.cwd ?? "~";
-  return expandHome(raw);
+  if (item.cwd) return expandHome(item.cwd);
+  if (workspace.layout === "split") {
+    const sideCwd = item.side === "frontend" ? workspace.frontendCwd : workspace.backendCwd;
+    return expandHome(sideCwd ?? "~");
+  }
+  return expandHome(workspace.cwd ?? "~");
 }
 
 // Run through the user's actual login shell in interactive mode (`-i`), not a

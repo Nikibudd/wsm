@@ -54,6 +54,38 @@ Forms are keyboard-driven: `↑↓` between fields, `←→` to change a dropdow
 value, `enter` to move to the next field (or save on the last one), `esc` to
 cancel.
 
+### Single project folder vs. split frontend/backend
+
+By default a workspace has one project folder (`cwd`) that all its items
+launch in unless they set their own `Directory`. The workspace form's
+**Layout** field can be switched to "Split frontend/backend" instead, which
+replaces the single directory with a **Frontend dir** and **Backend dir** —
+each item then gets a **Side** field (Frontend/Backend) that picks which
+folder it runs in by default (still overridable per item via `Directory`).
+This only shows up once you opt in; single-folder stays the default for new
+and existing workspaces.
+
+```yaml
+workspaces:
+  - name: acme-app
+    layout: split
+    frontendCwd: ~/dev/acme-web
+    backendCwd: ~/dev/acme-api
+    items:
+      - name: editor
+        type: app
+        launch: code .
+        closeAppName: Visual Studio Code
+      - name: frontend dev server
+        type: command
+        launch: npm run dev
+        side: frontend
+      - name: backend dev server
+        type: command
+        launch: task runserver
+        side: backend
+```
+
 Config lives at `~/.config/workspace-manager/config.yaml` and can be hand
 edited too. Example:
 
