@@ -28,12 +28,16 @@ wsm status              # shows what's currently open
 ## Configuring a workspace
 
 Run `wsm` with no arguments to launch the full-screen TUI (built with
-[Ink](https://github.com/vadimdemedes/ink)/React). It's a two-pane dashboard:
-workspaces on the left, the selected workspace's items on the right.
+[Ink](https://github.com/vadimdemedes/ink)/React). It's a two-pane dashboard
+with three levels of drill-down: **Groups → Workspaces → Items**.
 
-- `↑↓` move · `enter`/`→` open · `a` add · `r` rename workspace · `c` workspace
-  settings (from the items pane) · `d` delete (with confirmation) · `←`/`esc`
-  back · `q` quit
+- Left pane starts on **Groups** (e.g. "Work", "Personal") — workspaces
+  without a group show up under "Ungrouped". `enter`/`→` on a group reveals
+  the workspaces inside it; `←`/`esc` goes back up a level.
+- `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
+  lets you change/move a workspace's group) · `c` workspace settings (from
+  the items pane) · `d` delete (with confirmation, cascades to everything
+  inside) · `←`/`esc` back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,
     `open -a "MongoDB Compass" "mongodb://localhost:27017"`
@@ -57,6 +61,7 @@ edited too. Example:
 workspaces:
   - name: acme-api
     cwd: ~/dev/acme-api
+    group: Work
     items:
       - name: editor
         type: app
@@ -94,3 +99,5 @@ knows what to tear down and `wsm status` can report on it.
   (`$SHELL -i -c "<command>"`), the same way a real terminal would, so shell
   functions and aliases from `~/.zshrc`/`~/.bashrc` work as close/launch
   commands, not just plain binaries.
+- Set `WSM_CONFIG_DIR` to point `wsm` at a different config/state directory
+  (e.g. for testing) instead of `~/.config/workspace-manager`.

@@ -15,10 +15,14 @@ export interface WorkspaceItem {
   delayMs?: number;
 }
 
+export const UNGROUPED = "Ungrouped";
+
 export interface Workspace {
   name: string;
   /** Default working directory for items that don't specify their own. */
   cwd?: string;
+  /** Optional group name for TUI organization, e.g. "Work", "Personal". */
+  group?: string;
   items: WorkspaceItem[];
 }
 

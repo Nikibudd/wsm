@@ -270,21 +270,25 @@ export function ItemForm({
 export function WorkspaceForm({
   existing,
   existingNames,
+  presetGroup,
   onSubmit,
   onCancel,
 }: {
   existing?: Workspace;
   existingNames: string[];
-  onSubmit: (name: string, cwd: string) => void;
+  presetGroup?: string;
+  onSubmit: (name: string, cwd: string, group: string) => void;
   onCancel: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({
+    group: existing?.group ?? presetGroup ?? "",
     name: existing?.name ?? "",
     cwd: existing?.cwd ?? "",
   });
   const [error, setError] = useState("");
 
   const fields: FieldDef[] = [
+    { key: "group", label: "Group", kind: "text", placeholder: "e.g. Work (blank = Ungrouped)" },
     { key: "name", label: "Name", kind: "text", placeholder: "e.g. acme-api" },
     { key: "cwd", label: "Directory", kind: "text", placeholder: "~/dev/acme-api" },
   ];
@@ -299,12 +303,54 @@ export function WorkspaceForm({
       setError("A workspace with that name already exists");
       return;
     }
-    onSubmit(name, values.cwd.trim());
+    onSubmit(name, values.cwd.trim(), values.group.trim());
   };
 
   return (
     <Form
       title={existing ? `Edit workspace · ${existing.name}` : "New workspace"}
+      fields={fields}
+      values={values}
+      error={error}
+      submitLabel="save"
+      onChange={(k, v) => {
+        setError("");
+        setValues((prev) => ({ ...prev, [k]: v }));
+      }}
+      onSubmit={handleSubmit}
+      onCancel={onCancel}
+    />
+  );
+}
+
+export function RenameGroupForm({
+  groupName,
+  onSubmit,
+  onCancel,
+}: {
+  groupName: string;
+  onSubmit: (newName: string) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({ name: groupName });
+  const [error, setError] = useState("");
+
+  const fields: FieldDef[] = [
+    { key: "name", label: "Group name", kind: "text", placeholder: "e.g. Work" },
+  ];
+
+  const handleSubmit = () => {
+    const name = values.name.trim();
+    if (!name) {
+      setError("Name is required");
+      return;
+    }
+    onSubmit(name);
+  };
+
+  return (
+    <Form
+      title={`Rename group "${groupName}"`}
       fields={fields}
       values={values}
       error={error}
