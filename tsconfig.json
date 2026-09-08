@@ -12,7 +12,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
