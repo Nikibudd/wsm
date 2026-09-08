@@ -90,3 +90,7 @@ knows what to tear down and `wsm status` can report on it.
   need a head start (e.g. `docker compose up -d`) before things that depend
   on them, optionally adding a delay via the TUI's "delay before next item"
   field.
+- Launch and close commands run through your login shell in interactive mode
+  (`$SHELL -i -c "<command>"`), the same way a real terminal would, so shell
+  functions and aliases from `~/.zshrc`/`~/.bashrc` work as close/launch
+  commands, not just plain binaries.
