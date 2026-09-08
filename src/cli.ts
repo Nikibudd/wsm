@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { openWorkspace, closeWorkspaces, statusReport } from "./launcher.js";
 import { loadConfig } from "./config.js";
-import { runTui } from "./tui.js";
+import { runTui } from "./tui/index.js";
 
 const program = new Command();
 

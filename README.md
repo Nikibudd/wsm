@@ -27,10 +27,13 @@ wsm status              # shows what's currently open
 
 ## Configuring a workspace
 
-Run `wsm` with no arguments to launch the interactive TUI. From there you can:
+Run `wsm` with no arguments to launch the full-screen TUI (built with
+[Ink](https://github.com/vadimdemedes/ink)/React). It's a two-pane dashboard:
+workspaces on the left, the selected workspace's items on the right.
 
-- Add/rename/delete workspaces
-- Set a default working directory per workspace
+- `↑↓` move · `enter`/`→` open · `a` add · `r` rename workspace · `c` workspace
+  settings (from the items pane) · `d` delete (with confirmation) · `←`/`esc`
+  back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,
     `open -a "MongoDB Compass" "mongodb://localhost:27017"`
@@ -42,6 +45,10 @@ Run `wsm` with no arguments to launch the interactive TUI. From there you can:
   - Terminate the launched process directly — default for plain background
     commands
   - Leave it running (skip auto-close)
+
+Forms are keyboard-driven: `↑↓` between fields, `←→` to change a dropdown
+value, `enter` to move to the next field (or save on the last one), `esc` to
+cancel.
 
 Config lives at `~/.config/workspace-manager/config.yaml` and can be hand
 edited too. Example:
