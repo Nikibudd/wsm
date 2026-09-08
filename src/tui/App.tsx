@@ -1,9 +1,11 @@
+import os from "node:os";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
 import { loadConfig, saveConfig } from "../config.js";
 import { CONFIG_FILE } from "../paths.js";
-import type { Config, Workspace, WorkspaceItem } from "../types.js";
+import { loadState } from "../state.js";
+import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
 import { ItemForm, RenameGroupForm, WorkspaceForm } from "./Form.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
@@ -13,11 +15,16 @@ type Pane = "groups" | "workspaces" | "items";
 type Overlay =
   | { kind: "addWorkspace"; presetGroup?: string }
   | { kind: "editWorkspace"; workspaceName: string }
-  | { kind: "itemForm"; workspaceName: string; itemIndex: number | null }
+  | { kind: "itemForm"; workspaceName: string; itemIndex: number | null; presetSide?: ItemSide }
   | { kind: "confirmDeleteWorkspace"; workspaceName: string }
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
   | { kind: "confirmDeleteGroup"; groupName: string };
+
+function displayPath(p: string): string {
+  const home = os.homedir();
+  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
 
 type PendingSelect = { type: "group"; name: string } | { type: "workspace"; name: string };
 
@@ -69,10 +76,16 @@ function Header({ width }: { width: number }) {
       width={width}
       justifyContent="space-between"
     >
-      <Gradient name="cristal">
-        <Text bold> ⚡ WORKSPACE MANAGER </Text>
-      </Gradient>
-      <Text dimColor>{CONFIG_FILE}</Text>
+      <Box flexShrink={0}>
+        <Gradient name="cristal">
+          <Text bold> ⚡ WORKSPACE MANAGER </Text>
+        </Gradient>
+      </Box>
+      <Box flexShrink={1} flexGrow={0} minWidth={0}>
+        <Text dimColor wrap="truncate-start">
+          {displayPath(CONFIG_FILE)}
+        </Text>
+      </Box>
     </Box>
   );
 }
@@ -99,11 +112,13 @@ function GroupPane({
   selectedIndex,
   active,
   height,
+  openNames,
 }: {
   groups: Group[];
   selectedIndex: number;
   active: boolean;
   height: number;
+  openNames: Set<string>;
 }) {
   const addRowIndex = groups.length;
   return (
@@ -125,6 +140,7 @@ function GroupPane({
         groups.map((g, i) => {
           const selected = active && i === selectedIndex;
           const count = g.workspaces.length;
+          const hasOpen = g.workspaces.some((w) => openNames.has(w.name));
           return (
             <Text
               key={g.name}
@@ -132,6 +148,7 @@ function GroupPane({
               backgroundColor={selected ? "cyan" : undefined}
             >
               {selected ? "› " : "  "}
+              {hasOpen ? <Text color={selected ? "black" : "green"}>● </Text> : "  "}
               {g.name} ({count})
             </Text>
           );
@@ -154,12 +171,14 @@ function WorkspaceListPane({
   selectedIndex,
   active,
   height,
+  openNames,
 }: {
   groupName: string | undefined;
   workspaces: Workspace[];
   selectedIndex: number;
   active: boolean;
   height: number;
+  openNames: Set<string>;
 }) {
   const addRowIndex = workspaces.length;
   return (
@@ -180,6 +199,7 @@ function WorkspaceListPane({
       ) : (
         workspaces.map((w, i) => {
           const selected = active && i === selectedIndex;
+          const isOpen = openNames.has(w.name);
           return (
             <Text
               key={w.name}
@@ -187,6 +207,7 @@ function WorkspaceListPane({
               backgroundColor={selected ? "cyan" : undefined}
             >
               {selected ? "› " : "  "}
+              {isOpen ? <Text color={selected ? "black" : "green"}>● </Text> : "  "}
               {w.name} ({w.items.length})
             </Text>
           );
@@ -215,24 +236,81 @@ function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean })
       <Text color={selected ? "black" : "white"} backgroundColor={selected ? "cyan" : undefined}>
         {selected ? "› " : "  "}
         {item.name} <Text color={selected ? "black" : typeColor}>[{item.type}]</Text>
-        {item.side ? (
-          <Text color={selected ? "black" : "cyan"}> [{item.side}]</Text>
-        ) : null}
       </Text>
-      <Text dimColor>{"    "}launch: {item.launch}</Text>
-      <Text dimColor>{"    "}close:  {closeLabel}</Text>
+      <Text dimColor wrap="truncate-end">
+        {"    "}launch: {item.launch}
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {"    "}close:  {closeLabel}
+      </Text>
     </Box>
   );
+}
+
+interface ItemEntry {
+  item: WorkspaceItem;
+  originalIndex: number;
+}
+
+function SideColumn({
+  title,
+  cwd,
+  entries,
+  active,
+  selectedIndex,
+}: {
+  title: string;
+  cwd: string | undefined;
+  entries: ItemEntry[];
+  active: boolean;
+  selectedIndex: number;
+}) {
+  const addRowIndex = entries.length;
+  return (
+    <Box flexDirection="column" flexGrow={1} flexBasis={0} minWidth={0}>
+      <Text bold color={active ? "cyan" : "gray"}>
+        {title}
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {cwd ?? "(not set)"}
+      </Text>
+      <Box height={1} />
+      {entries.length === 0 ? (
+        <Text dimColor>No items yet.</Text>
+      ) : (
+        entries.map(({ item }, i) => (
+          <ItemRow key={item.name + i} item={item} selected={active && i === selectedIndex} />
+        ))
+      )}
+      <Text
+        color={active && selectedIndex === addRowIndex ? "black" : "green"}
+        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
+      >
+        {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add item
+      </Text>
+    </Box>
+  );
+}
+
+function splitEntries(workspace: Workspace): { frontend: ItemEntry[]; backend: ItemEntry[] } {
+  const frontend: ItemEntry[] = [];
+  const backend: ItemEntry[] = [];
+  workspace.items.forEach((item, originalIndex) => {
+    (item.side === "backend" ? backend : frontend).push({ item, originalIndex });
+  });
+  return { frontend, backend };
 }
 
 function ItemPane({
   workspace,
   selectedIndex,
+  itemColumn,
   active,
   height,
 }: {
   workspace: Workspace | undefined;
   selectedIndex: number;
+  itemColumn: ItemSide;
   active: boolean;
   height: number;
 }) {
@@ -253,7 +331,7 @@ function ItemPane({
     );
   }
 
-  const addRowIndex = workspace.items.length;
+  const isSplit = workspace.layout === "split";
 
   return (
     <Box
@@ -268,28 +346,50 @@ function ItemPane({
         {workspace.name}
       </Text>
       <Text dimColor>group: {workspace.group ?? UNGROUPED}</Text>
-      {workspace.layout === "split" ? (
-        <>
-          <Text dimColor>frontend: {workspace.frontendCwd ?? "(not set)"}</Text>
-          <Text dimColor>backend:  {workspace.backendCwd ?? "(not set)"}</Text>
-        </>
-      ) : (
+      {!isSplit ? (
         <Text dimColor>cwd: {workspace.cwd ?? "(none set — items use their own or home dir)"}</Text>
-      )}
+      ) : null}
       <Box height={1} />
-      {workspace.items.length === 0 ? (
-        <Text dimColor>No items yet. Press "a" to add one (editor, terminal, docker, ...).</Text>
+      {isSplit ? (
+        (() => {
+          const { frontend, backend } = splitEntries(workspace);
+          return (
+            <Box flexDirection="row" flexGrow={1}>
+              <SideColumn
+                title="Frontend"
+                cwd={workspace.frontendCwd}
+                entries={frontend}
+                active={active && itemColumn === "frontend"}
+                selectedIndex={selectedIndex}
+              />
+              <Box width={2} />
+              <SideColumn
+                title="Backend"
+                cwd={workspace.backendCwd}
+                entries={backend}
+                active={active && itemColumn === "backend"}
+                selectedIndex={selectedIndex}
+              />
+            </Box>
+          );
+        })()
       ) : (
-        workspace.items.map((item, i) => (
-          <ItemRow key={item.name + i} item={item} selected={active && i === selectedIndex} />
-        ))
+        <>
+          {workspace.items.length === 0 ? (
+            <Text dimColor>No items yet. Press "a" to add one (editor, terminal, docker, ...).</Text>
+          ) : (
+            workspace.items.map((item, i) => (
+              <ItemRow key={item.name + i} item={item} selected={active && i === selectedIndex} />
+            ))
+          )}
+          <Text
+            color={active && selectedIndex === workspace.items.length ? "black" : "green"}
+            backgroundColor={active && selectedIndex === workspace.items.length ? "cyan" : undefined}
+          >
+            {active && selectedIndex === workspace.items.length ? "› " : "  "}+ Add item
+          </Text>
+        </>
       )}
-      <Text
-        color={active && selectedIndex === addRowIndex ? "black" : "green"}
-        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
-      >
-        {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add item
-      </Text>
     </Box>
   );
 }
@@ -303,8 +403,11 @@ export function App() {
   const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
   const [itemIndex, setItemIndex] = useState(0);
+  const [itemColumn, setItemColumn] = useState<ItemSide>("frontend");
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const openNames = useMemo(() => new Set(loadState().sessions.map((s) => s.workspace)), []);
 
   const pendingSelect = useRef<PendingSelect | null>(null);
   const messageTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -322,6 +425,12 @@ export function App() {
   const currentGroup = groups[groupIndex];
   const currentGroupWorkspaces = currentGroup?.workspaces ?? [];
   const currentWorkspace = currentGroupWorkspaces[wsIndex];
+  const isSplit = currentWorkspace?.layout === "split";
+  const { frontend: frontendEntries, backend: backendEntries } = useMemo(
+    () => (currentWorkspace ? splitEntries(currentWorkspace) : { frontend: [], backend: [] }),
+    [currentWorkspace],
+  );
+  const activeColumnEntries = itemColumn === "frontend" ? frontendEntries : backendEntries;
 
   // Resolve a pending "select this by name" request once the derived group
   // list reflects a just-made change (add/rename/move workspace or group).
@@ -358,8 +467,17 @@ export function App() {
   }, [currentGroup?.name, currentGroupWorkspaces.length]);
 
   useEffect(() => {
-    setItemIndex((i) => Math.min(i, currentWorkspace ? currentWorkspace.items.length : 0));
-  }, [currentWorkspace, wsIndex]);
+    setItemColumn("frontend");
+  }, [currentWorkspace?.name]);
+
+  useEffect(() => {
+    if (!currentWorkspace) {
+      setItemIndex(0);
+      return;
+    }
+    const maxIndex = isSplit ? activeColumnEntries.length : currentWorkspace.items.length;
+    setItemIndex((i) => Math.min(i, maxIndex));
+  }, [currentWorkspace, wsIndex, isSplit, activeColumnEntries.length]);
 
   // Fall back to a valid pane if the thing we were viewing disappeared
   // (e.g. deleting the only workspace in a group).
@@ -439,6 +557,54 @@ export function App() {
         setPane(currentGroup ? "workspaces" : "groups");
         return;
       }
+
+      if (isSplit) {
+        const maxIndex = activeColumnEntries.length; // synthetic add row
+        if (key.escape) {
+          setPane("workspaces");
+        } else if (key.leftArrow) {
+          if (itemColumn === "backend") {
+            setItemColumn("frontend");
+            setItemIndex(0);
+          } else {
+            setPane("workspaces");
+          }
+        } else if (key.rightArrow) {
+          if (itemColumn === "frontend") {
+            setItemColumn("backend");
+            setItemIndex(0);
+          }
+        } else if (key.downArrow) {
+          setItemIndex((i) => Math.min(i + 1, maxIndex));
+        } else if (key.upArrow) {
+          setItemIndex((i) => Math.max(i - 1, 0));
+        } else if (key.return || input === "a") {
+          if (input === "a" || itemIndex === maxIndex) {
+            setOverlay({
+              kind: "itemForm",
+              workspaceName: currentWorkspace.name,
+              itemIndex: null,
+              presetSide: itemColumn,
+            });
+          } else {
+            setOverlay({
+              kind: "itemForm",
+              workspaceName: currentWorkspace.name,
+              itemIndex: activeColumnEntries[itemIndex]!.originalIndex,
+            });
+          }
+        } else if (input === "d" && itemIndex < maxIndex) {
+          setOverlay({
+            kind: "confirmDeleteItem",
+            workspaceName: currentWorkspace.name,
+            itemIndex: activeColumnEntries[itemIndex]!.originalIndex,
+          });
+        } else if (input === "c") {
+          setOverlay({ kind: "editWorkspace", workspaceName: currentWorkspace.name });
+        }
+        return;
+      }
+
       const maxIndex = currentWorkspace.items.length; // synthetic add row
 
       if (key.leftArrow || key.escape) {
@@ -466,13 +632,16 @@ export function App() {
 
   const hint = useMemo(() => {
     if (pane === "groups") {
-      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · q quit";
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · ● = open · q quit";
     }
     if (pane === "workspaces") {
-      return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · q quit";
+      return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · ● = open · q quit";
+    }
+    if (isSplit) {
+      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · q quit";
     }
     return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · q quit";
-  }, [pane]);
+  }, [pane, isSplit]);
 
   let overlayNode: React.ReactNode = null;
   if (overlay) {
@@ -533,6 +702,7 @@ export function App() {
         <ItemForm
           existing={existing}
           isSplit={workspace.layout === "split"}
+          presetSide={overlay.presetSide}
           onSubmit={(item) => {
             mutateWorkspace(overlay.workspaceName, (w) => {
               const items = [...w.items];
@@ -637,6 +807,7 @@ export function App() {
                 selectedIndex={groupIndex}
                 active={pane === "groups"}
                 height={contentHeight}
+                openNames={openNames}
               />
             ) : (
               <WorkspaceListPane
@@ -645,12 +816,14 @@ export function App() {
                 selectedIndex={wsIndex}
                 active={pane === "workspaces"}
                 height={contentHeight}
+                openNames={openNames}
               />
             )}
             <Box width={1} />
             <ItemPane
               workspace={currentWorkspace}
               selectedIndex={itemIndex}
+              itemColumn={itemColumn}
               active={pane === "items"}
               height={contentHeight}
             />

@@ -59,6 +59,8 @@ function closeSessionItem(item: SessionItem): { ok: boolean; message: string } {
     }
     if (item.pid) {
       try {
+        // Negative pid signals the whole process group (items are spawned detached,
+        // so they are the leader of their own group).
         process.kill(-item.pid, "SIGTERM");
       } catch {
         process.kill(item.pid, "SIGTERM");

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useStdout } from "ink";
 import type { ItemSide, ItemType, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
 
 export interface FieldOption {
@@ -48,6 +48,8 @@ export function Form({
   onCancel,
 }: FormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
+  const { stdout } = useStdout();
+  const width = Math.max(40, Math.min(68, (stdout?.columns || 80) - 4));
 
   useEffect(() => {
     if (focusIndex > fields.length - 1) {
@@ -126,7 +128,7 @@ export function Form({
       borderColor={accentColor}
       paddingX={2}
       paddingY={1}
-      width={68}
+      width={width}
     >
       <Text bold color={accentColor}>
         {title}
@@ -172,7 +174,7 @@ export function Form({
         </>
       ) : null}
       <Box height={1} />
-      <Text dimColor>↑↓ field · ←→ change · enter next/{submitLabel} · esc cancel</Text>
+      <Text dimColor>↑↓ field · ←→ change · enter next / {submitLabel} · esc cancel</Text>
     </Box>
   );
 }
@@ -180,11 +182,13 @@ export function Form({
 export function ItemForm({
   existing,
   isSplit,
+  presetSide,
   onSubmit,
   onCancel,
 }: {
   existing?: WorkspaceItem;
   isSplit: boolean;
+  presetSide?: ItemSide;
   onSubmit: (item: WorkspaceItem) => void;
   onCancel: () => void;
 }) {
@@ -192,7 +196,7 @@ export function ItemForm({
     name: existing?.name ?? "",
     type: existing?.type ?? "app",
     launch: existing?.launch ?? "",
-    side: existing?.side ?? "frontend",
+    side: existing?.side ?? presetSide ?? "frontend",
     cwd: existing?.cwd ?? "",
     closeStrategy: existing?.closeAppName
       ? "app"
