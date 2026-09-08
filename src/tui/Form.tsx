@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
 import type { ItemType, Workspace, WorkspaceItem } from "../types.js";
 
 export interface FieldOption {
@@ -16,6 +15,15 @@ export interface FieldDef {
   placeholder?: string;
 }
 
+// (key, updater) rather than (key, value): Ink can deliver several keypresses
+// from a single stdin read chunk before React commits a render in between
+// (e.g. fast backspacing), so every edit is applied via React's functional
+// setState form against the true latest pending value, never a value closed
+// over from a stale render — see Form's useInput handler below, which does
+// all character editing itself instead of delegating to a text-input
+// component that would compute from a (possibly stale) value prop.
+export type FieldUpdater = (key: string, updater: (prev: string) => string) => void;
+
 interface FormProps {
   title: string;
   accentColor?: string;
@@ -23,7 +31,7 @@ interface FormProps {
   values: Record<string, string>;
   error?: string;
   submitLabel?: string;
-  onChange: (key: string, value: string) => void;
+  onChange: FieldUpdater;
   onSubmit: () => void;
   onCancel: () => void;
 }
@@ -47,6 +55,11 @@ export function Form({
     }
   }, [fields.length, focusIndex]);
 
+  const advanceOrSubmit = () => {
+    if (focusIndex === fields.length - 1) onSubmit();
+    else setFocusIndex((i) => i + 1);
+  };
+
   useInput((input, key) => {
     if (key.escape) {
       onCancel();
@@ -54,6 +67,7 @@ export function Form({
     }
 
     const field = fields[focusIndex];
+    if (!field) return;
 
     if (key.upArrow) {
       setFocusIndex((i) => Math.max(0, i - 1));
@@ -64,22 +78,44 @@ export function Form({
       return;
     }
 
-    if (field?.kind === "select" && (key.leftArrow || key.rightArrow)) {
-      const opts = field.options ?? [];
-      if (opts.length === 0) return;
-      const currentIdx = Math.max(
-        0,
-        opts.findIndex((o) => o.value === values[field.key]),
-      );
-      const dir = key.leftArrow ? -1 : 1;
-      const next = (currentIdx + dir + opts.length) % opts.length;
-      onChange(field.key, opts[next]!.value);
+    if (field.kind === "select") {
+      if (key.leftArrow || key.rightArrow) {
+        const opts = field.options ?? [];
+        if (opts.length === 0) return;
+        const currentIdx = Math.max(
+          0,
+          opts.findIndex((o) => o.value === values[field.key]),
+        );
+        const dir = key.leftArrow ? -1 : 1;
+        const next = (currentIdx + dir + opts.length) % opts.length;
+        const nextValue = opts[next]!.value;
+        onChange(field.key, () => nextValue);
+        return;
+      }
+      if (key.return) advanceOrSubmit();
       return;
     }
 
-    if (key.return && field?.kind === "select") {
-      if (focusIndex === fields.length - 1) onSubmit();
-      else setFocusIndex((i) => i + 1);
+    // Text field: handle every keystroke here (rather than via a text-input
+    // component) so edits go through React's functional setState updater and
+    // survive multiple keystrokes landing in the same stdin chunk.
+    if (key.return) {
+      advanceOrSubmit();
+      return;
+    }
+    if (key.backspace || key.delete) {
+      onChange(field.key, (prev) => prev.slice(0, -1));
+      return;
+    }
+    if (key.ctrl && input === "u") {
+      onChange(field.key, () => "");
+      return;
+    }
+    if (key.ctrl || key.meta || key.tab) {
+      return;
+    }
+    if (input) {
+      onChange(field.key, (prev) => prev + input);
     }
   });
 
@@ -110,15 +146,13 @@ export function Form({
             <Box flexGrow={1}>
               {f.kind === "text" ? (
                 focused ? (
-                  <TextInput
-                    value={value}
-                    placeholder={f.placeholder}
-                    onChange={(v) => onChange(f.key, v)}
-                    onSubmit={() => {
-                      if (i === fields.length - 1) onSubmit();
-                      else setFocusIndex(i + 1);
-                    }}
-                  />
+                  <Text color="white">
+                    {value || (f.placeholder ? "" : "")}
+                    <Text backgroundColor="white" color="black">
+                      {" "}
+                    </Text>
+                    {!value && f.placeholder ? <Text dimColor> {f.placeholder}</Text> : null}
+                  </Text>
                 ) : (
                   <Text color={value ? "white" : "gray"}>{value || f.placeholder || "—"}</Text>
                 )
@@ -257,9 +291,9 @@ export function ItemForm({
       values={values}
       error={error}
       submitLabel="save"
-      onChange={(k, v) => {
+      onChange={(k, updater) => {
         setError("");
-        setValues((prev) => ({ ...prev, [k]: v }));
+        setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
       }}
       onSubmit={handleSubmit}
       onCancel={onCancel}
@@ -313,9 +347,9 @@ export function WorkspaceForm({
       values={values}
       error={error}
       submitLabel="save"
-      onChange={(k, v) => {
+      onChange={(k, updater) => {
         setError("");
-        setValues((prev) => ({ ...prev, [k]: v }));
+        setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
       }}
       onSubmit={handleSubmit}
       onCancel={onCancel}
@@ -355,9 +389,9 @@ export function RenameGroupForm({
       values={values}
       error={error}
       submitLabel="save"
-      onChange={(k, v) => {
+      onChange={(k, updater) => {
         setError("");
-        setValues((prev) => ({ ...prev, [k]: v }));
+        setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
       }}
       onSubmit={handleSubmit}
       onCancel={onCancel}
