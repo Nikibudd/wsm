@@ -1,0 +1,27 @@
+{
+  "name": "workspace-manager",
+  "version": "1.0.0",
+  "description": "Fast CLI workspace switcher for coding projects",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wsm": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "dev": "tsx src/cli.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@inquirer/prompts": "^8.7.2",
+    "commander": "^15.0.0",
+    "js-yaml": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
