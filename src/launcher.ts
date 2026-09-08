@@ -9,15 +9,25 @@ function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
   return expandHome(raw);
 }
 
+// Run through the user's actual login shell in interactive mode (`-i`), not a
+// bare `/bin/sh` (which `child_process`'s `shell: true` uses). Interactive
+// mode is what makes zsh/bash source ~/.zshrc or ~/.bashrc, so shell
+// functions and aliases defined there behave the same as typing the command
+// in a real terminal.
+const USER_SHELL = process.env.SHELL || "/bin/zsh";
+
+function shellArgs(command: string): string[] {
+  return ["-i", "-c", command];
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function launchItem(workspace: Workspace, item: WorkspaceItem): SessionItem {
   const cwd = resolveCwd(workspace, item);
-  const child = spawn(item.launch, {
+  const child = spawn(USER_SHELL, shellArgs(item.launch), {
     cwd,
-    shell: true,
     detached: true,
     stdio: "ignore",
   });
@@ -35,7 +45,7 @@ function launchItem(workspace: Workspace, item: WorkspaceItem): SessionItem {
 function closeSessionItem(item: SessionItem): { ok: boolean; message: string } {
   try {
     if (item.close) {
-      spawnSync(item.close, { cwd: item.cwd, shell: true, stdio: "ignore" });
+      spawnSync(USER_SHELL, shellArgs(item.close), { cwd: item.cwd, stdio: "ignore" });
       return { ok: true, message: "ran close command" };
     }
     if (item.closeAppName) {
