@@ -4,17 +4,42 @@ import Gradient from "ink-gradient";
 import { loadConfig, saveConfig } from "../config.js";
 import { CONFIG_FILE } from "../paths.js";
 import type { Config, Workspace, WorkspaceItem } from "../types.js";
-import { ItemForm, WorkspaceForm } from "./Form.js";
+import { UNGROUPED } from "../types.js";
+import { ItemForm, RenameGroupForm, WorkspaceForm } from "./Form.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 
-type Pane = "workspaces" | "items";
+type Pane = "groups" | "workspaces" | "items";
 
 type Overlay =
-  | { kind: "addWorkspace" }
-  | { kind: "editWorkspace"; workspaceIndex: number }
-  | { kind: "itemForm"; workspaceIndex: number; itemIndex: number | null }
-  | { kind: "confirmDeleteWorkspace"; workspaceIndex: number }
-  | { kind: "confirmDeleteItem"; workspaceIndex: number; itemIndex: number };
+  | { kind: "addWorkspace"; presetGroup?: string }
+  | { kind: "editWorkspace"; workspaceName: string }
+  | { kind: "itemForm"; workspaceName: string; itemIndex: number | null }
+  | { kind: "confirmDeleteWorkspace"; workspaceName: string }
+  | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
+  | { kind: "renameGroup"; groupName: string }
+  | { kind: "confirmDeleteGroup"; groupName: string };
+
+type PendingSelect = { type: "group"; name: string } | { type: "workspace"; name: string };
+
+interface Group {
+  name: string;
+  workspaces: Workspace[];
+}
+
+function groupWorkspaces(workspaces: Workspace[]): Group[] {
+  const map = new Map<string, Workspace[]>();
+  for (const w of workspaces) {
+    const g = w.group?.trim() || UNGROUPED;
+    if (!map.has(g)) map.set(g, []);
+    map.get(g)!.push(w);
+  }
+  const names = [...map.keys()].sort((a, b) => {
+    if (a === UNGROUPED) return 1;
+    if (b === UNGROUPED) return -1;
+    return a.localeCompare(b);
+  });
+  return names.map((name) => ({ name, workspaces: map.get(name)! }));
+}
 
 function useTerminalSize() {
   const { stdout } = useStdout();
@@ -69,12 +94,68 @@ function Footer({ hint, message, width }: { hint: string; message: string | null
   );
 }
 
-function WorkspacePane({
+function GroupPane({
+  groups,
+  selectedIndex,
+  active,
+  height,
+}: {
+  groups: Group[];
+  selectedIndex: number;
+  active: boolean;
+  height: number;
+}) {
+  const addRowIndex = groups.length;
+  return (
+    <Box
+      flexDirection="column"
+      width={32}
+      height={height}
+      borderStyle="round"
+      borderColor={active ? "cyan" : "gray"}
+      paddingX={1}
+    >
+      <Text bold underline color={active ? "cyan" : "white"}>
+        Groups
+      </Text>
+      <Box height={1} />
+      {groups.length === 0 ? (
+        <Text dimColor>No workspaces yet.</Text>
+      ) : (
+        groups.map((g, i) => {
+          const selected = active && i === selectedIndex;
+          const count = g.workspaces.length;
+          return (
+            <Text
+              key={g.name}
+              color={selected ? "black" : "white"}
+              backgroundColor={selected ? "cyan" : undefined}
+            >
+              {selected ? "› " : "  "}
+              {g.name} ({count})
+            </Text>
+          );
+        })
+      )}
+      <Box height={1} />
+      <Text
+        color={active && selectedIndex === addRowIndex ? "black" : "green"}
+        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
+      >
+        {active && selectedIndex === addRowIndex ? "› " : "  "}+ New workspace
+      </Text>
+    </Box>
+  );
+}
+
+function WorkspaceListPane({
+  groupName,
   workspaces,
   selectedIndex,
   active,
   height,
 }: {
+  groupName: string | undefined;
   workspaces: Workspace[];
   selectedIndex: number;
   active: boolean;
@@ -90,12 +171,12 @@ function WorkspacePane({
       borderColor={active ? "cyan" : "gray"}
       paddingX={1}
     >
-      <Text bold underline color={active ? "cyan" : "white"}>
-        Workspaces
+      <Text bold underline color={active ? "cyan" : "white"} wrap="truncate-end">
+        Groups › {groupName ?? "—"}
       </Text>
       <Box height={1} />
       {workspaces.length === 0 ? (
-        <Text dimColor>No workspaces yet.</Text>
+        <Text dimColor>No workspaces in this group.</Text>
       ) : (
         workspaces.map((w, i) => {
           const selected = active && i === selectedIndex;
@@ -146,13 +227,11 @@ function ItemPane({
   selectedIndex,
   active,
   height,
-  width,
 }: {
   workspace: Workspace | undefined;
   selectedIndex: number;
   active: boolean;
   height: number;
-  width: number;
 }) {
   if (!workspace) {
     return (
@@ -209,12 +288,14 @@ export function App() {
   const { columns, rows } = useTerminalSize();
 
   const [config, setConfig] = useState<Config>(() => loadConfig());
-  const [pane, setPane] = useState<Pane>("workspaces");
+  const [pane, setPane] = useState<Pane>("groups");
+  const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
   const [itemIndex, setItemIndex] = useState(0);
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  const pendingSelect = useRef<PendingSelect | null>(null);
   const messageTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const flash = (text: string) => {
     setMessage(text);
@@ -226,25 +307,61 @@ export function App() {
     saveConfig(config);
   }, [config]);
 
-  useEffect(() => {
-    setWsIndex((i) => Math.min(i, config.workspaces.length));
-  }, [config.workspaces.length]);
+  const groups = useMemo(() => groupWorkspaces(config.workspaces), [config.workspaces]);
+  const currentGroup = groups[groupIndex];
+  const currentGroupWorkspaces = currentGroup?.workspaces ?? [];
+  const currentWorkspace = currentGroupWorkspaces[wsIndex];
 
-  const currentWorkspace = config.workspaces[wsIndex];
-
+  // Resolve a pending "select this by name" request once the derived group
+  // list reflects a just-made change (add/rename/move workspace or group).
   useEffect(() => {
-    if (currentWorkspace) {
-      setItemIndex((i) => Math.min(i, currentWorkspace.items.length));
-    } else {
-      setItemIndex(0);
+    const pending = pendingSelect.current;
+    if (!pending) return;
+    if (pending.type === "group") {
+      const gi = groups.findIndex((g) => g.name === pending.name);
+      if (gi !== -1) {
+        setGroupIndex(gi);
+        setPane("groups");
+        pendingSelect.current = null;
+      }
+      return;
     }
+    for (let gi = 0; gi < groups.length; gi++) {
+      const wi = groups[gi]!.workspaces.findIndex((w) => w.name === pending.name);
+      if (wi !== -1) {
+        setGroupIndex(gi);
+        setWsIndex(wi);
+        setPane("workspaces");
+        pendingSelect.current = null;
+        return;
+      }
+    }
+  }, [groups]);
+
+  useEffect(() => {
+    setGroupIndex((i) => Math.min(i, groups.length));
+  }, [groups.length]);
+
+  useEffect(() => {
+    setWsIndex((i) => Math.min(i, currentGroupWorkspaces.length));
+  }, [currentGroup?.name, currentGroupWorkspaces.length]);
+
+  useEffect(() => {
+    setItemIndex((i) => Math.min(i, currentWorkspace ? currentWorkspace.items.length : 0));
   }, [currentWorkspace, wsIndex]);
 
-  const mutateWorkspace = (index: number, fn: (w: Workspace) => Workspace) => {
-    setConfig((prev) => {
-      const workspaces = prev.workspaces.map((w, i) => (i === index ? fn(w) : w));
-      return { ...prev, workspaces };
-    });
+  // Fall back to a valid pane if the thing we were viewing disappeared
+  // (e.g. deleting the only workspace in a group).
+  useEffect(() => {
+    if (pane === "workspaces" && !currentGroup) setPane("groups");
+    else if (pane === "items" && !currentWorkspace) setPane(currentGroup ? "workspaces" : "groups");
+  }, [pane, currentGroup, currentWorkspace]);
+
+  const mutateWorkspace = (name: string, fn: (w: Workspace) => Workspace) => {
+    setConfig((prev) => ({
+      ...prev,
+      workspaces: prev.workspaces.map((w) => (w.name === name ? fn(w) : w)),
+    }));
   };
 
   useInput(
@@ -254,33 +371,64 @@ export function App() {
         return;
       }
 
-      if (pane === "workspaces") {
-        const maxIndex = config.workspaces.length; // add-row included
-        if (key.downArrow) setWsIndex((i) => Math.min(i + 1, maxIndex));
-        else if (key.upArrow) setWsIndex((i) => Math.max(i - 1, 0));
+      if (pane === "groups") {
+        const maxIndex = groups.length; // synthetic "+ New workspace" row
+        if (key.downArrow) setGroupIndex((i) => Math.min(i + 1, maxIndex));
+        else if (key.upArrow) setGroupIndex((i) => Math.max(i - 1, 0));
         else if (key.return || key.rightArrow) {
-          if (wsIndex === config.workspaces.length) {
+          if (groupIndex === groups.length) {
             setOverlay({ kind: "addWorkspace" });
-          } else if (config.workspaces.length > 0) {
-            setPane("items");
+          } else if (groups.length > 0) {
+            setPane("workspaces");
           }
         } else if (input === "a") {
           setOverlay({ kind: "addWorkspace" });
-        } else if (input === "r" && wsIndex < config.workspaces.length) {
-          setOverlay({ kind: "editWorkspace", workspaceIndex: wsIndex });
-        } else if (input === "d" && wsIndex < config.workspaces.length) {
-          setOverlay({ kind: "confirmDeleteWorkspace", workspaceIndex: wsIndex });
+        } else if (input === "r" && groupIndex < groups.length) {
+          setOverlay({ kind: "renameGroup", groupName: groups[groupIndex]!.name });
+        } else if (input === "d" && groupIndex < groups.length) {
+          setOverlay({ kind: "confirmDeleteGroup", groupName: groups[groupIndex]!.name });
+        }
+        return;
+      }
+
+      if (pane === "workspaces") {
+        if (!currentGroup) {
+          setPane("groups");
+          return;
+        }
+        const maxIndex = currentGroupWorkspaces.length; // synthetic add row
+        const presetGroup = currentGroup.name === UNGROUPED ? undefined : currentGroup.name;
+        if (key.leftArrow || key.escape) {
+          setPane("groups");
+        } else if (key.downArrow) {
+          setWsIndex((i) => Math.min(i + 1, maxIndex));
+        } else if (key.upArrow) {
+          setWsIndex((i) => Math.max(i - 1, 0));
+        } else if (key.return || key.rightArrow) {
+          if (wsIndex === maxIndex) {
+            setOverlay({ kind: "addWorkspace", presetGroup });
+          } else if (currentGroupWorkspaces.length > 0) {
+            setPane("items");
+          }
+        } else if (input === "a") {
+          setOverlay({ kind: "addWorkspace", presetGroup });
+        } else if (input === "r" && wsIndex < maxIndex) {
+          setOverlay({ kind: "editWorkspace", workspaceName: currentGroupWorkspaces[wsIndex]!.name });
+        } else if (input === "d" && wsIndex < maxIndex) {
+          setOverlay({
+            kind: "confirmDeleteWorkspace",
+            workspaceName: currentGroupWorkspaces[wsIndex]!.name,
+          });
         }
         return;
       }
 
       // pane === "items"
-      const workspace = config.workspaces[wsIndex];
-      if (!workspace) {
-        setPane("workspaces");
+      if (!currentWorkspace) {
+        setPane(currentGroup ? "workspaces" : "groups");
         return;
       }
-      const maxIndex = workspace.items.length; // add-row included
+      const maxIndex = currentWorkspace.items.length; // synthetic add row
 
       if (key.leftArrow || key.escape) {
         setPane("workspaces");
@@ -290,14 +438,14 @@ export function App() {
         setItemIndex((i) => Math.max(i - 1, 0));
       } else if (key.return || input === "a") {
         if (input === "a" || itemIndex === maxIndex) {
-          setOverlay({ kind: "itemForm", workspaceIndex: wsIndex, itemIndex: null });
+          setOverlay({ kind: "itemForm", workspaceName: currentWorkspace.name, itemIndex: null });
         } else {
-          setOverlay({ kind: "itemForm", workspaceIndex: wsIndex, itemIndex });
+          setOverlay({ kind: "itemForm", workspaceName: currentWorkspace.name, itemIndex });
         }
       } else if (input === "d" && itemIndex < maxIndex) {
-        setOverlay({ kind: "confirmDeleteItem", workspaceIndex: wsIndex, itemIndex });
+        setOverlay({ kind: "confirmDeleteItem", workspaceName: currentWorkspace.name, itemIndex });
       } else if (input === "c") {
-        setOverlay({ kind: "editWorkspace", workspaceIndex: wsIndex });
+        setOverlay({ kind: "editWorkspace", workspaceName: currentWorkspace.name });
       }
     },
     { isActive: overlay === null },
@@ -306,8 +454,11 @@ export function App() {
   const contentHeight = Math.max(10, rows - 5);
 
   const hint = useMemo(() => {
+    if (pane === "groups") {
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · q quit";
+    }
     if (pane === "workspaces") {
-      return "↑↓ select · enter/→ open · a add · r rename · d delete · q quit";
+      return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · q quit";
     }
     return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · q quit";
   }, [pane]);
@@ -318,12 +469,13 @@ export function App() {
       overlayNode = (
         <WorkspaceForm
           existingNames={config.workspaces.map((w) => w.name)}
-          onSubmit={(name, cwd) => {
+          presetGroup={overlay.presetGroup}
+          onSubmit={(name, cwd, group) => {
             setConfig((prev) => ({
               ...prev,
-              workspaces: [...prev.workspaces, { name, cwd: cwd || undefined, items: [] }],
+              workspaces: [...prev.workspaces, { name, cwd: cwd || undefined, group: group || undefined, items: [] }],
             }));
-            setWsIndex(config.workspaces.length);
+            pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
             flash(`Created workspace "${name}"`);
           }}
@@ -331,13 +483,19 @@ export function App() {
         />
       );
     } else if (overlay.kind === "editWorkspace") {
-      const workspace = config.workspaces[overlay.workspaceIndex];
+      const workspace = config.workspaces.find((w) => w.name === overlay.workspaceName);
       overlayNode = workspace ? (
         <WorkspaceForm
           existing={workspace}
           existingNames={config.workspaces.map((w) => w.name)}
-          onSubmit={(name, cwd) => {
-            mutateWorkspace(overlay.workspaceIndex, (w) => ({ ...w, name, cwd: cwd || undefined }));
+          onSubmit={(name, cwd, group) => {
+            mutateWorkspace(overlay.workspaceName, (w) => ({
+              ...w,
+              name,
+              cwd: cwd || undefined,
+              group: group || undefined,
+            }));
+            pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
             flash(`Saved workspace "${name}"`);
           }}
@@ -345,14 +503,14 @@ export function App() {
         />
       ) : null;
     } else if (overlay.kind === "itemForm") {
-      const workspace = config.workspaces[overlay.workspaceIndex];
+      const workspace = config.workspaces.find((w) => w.name === overlay.workspaceName);
       const existing =
         overlay.itemIndex !== null ? workspace?.items[overlay.itemIndex] : undefined;
       overlayNode = workspace ? (
         <ItemForm
           existing={existing}
           onSubmit={(item) => {
-            mutateWorkspace(overlay.workspaceIndex, (w) => {
+            mutateWorkspace(overlay.workspaceName, (w) => {
               const items = [...w.items];
               if (overlay.itemIndex !== null) items[overlay.itemIndex] = item;
               else items.push(item);
@@ -365,14 +523,14 @@ export function App() {
         />
       ) : null;
     } else if (overlay.kind === "confirmDeleteWorkspace") {
-      const workspace = config.workspaces[overlay.workspaceIndex];
+      const workspace = config.workspaces.find((w) => w.name === overlay.workspaceName);
       overlayNode = workspace ? (
         <ConfirmDialog
           message={`Delete workspace "${workspace.name}" and all its items?`}
           onConfirm={() => {
             setConfig((prev) => ({
               ...prev,
-              workspaces: prev.workspaces.filter((_, i) => i !== overlay.workspaceIndex),
+              workspaces: prev.workspaces.filter((w) => w.name !== overlay.workspaceName),
             }));
             setOverlay(null);
             flash(`Deleted workspace "${workspace.name}"`);
@@ -381,13 +539,13 @@ export function App() {
         />
       ) : null;
     } else if (overlay.kind === "confirmDeleteItem") {
-      const workspace = config.workspaces[overlay.workspaceIndex];
+      const workspace = config.workspaces.find((w) => w.name === overlay.workspaceName);
       const item = workspace?.items[overlay.itemIndex];
       overlayNode = item ? (
         <ConfirmDialog
           message={`Delete item "${item.name}"?`}
           onConfirm={() => {
-            mutateWorkspace(overlay.workspaceIndex, (w) => ({
+            mutateWorkspace(overlay.workspaceName, (w) => ({
               ...w,
               items: w.items.filter((_, i) => i !== overlay.itemIndex),
             }));
@@ -397,6 +555,45 @@ export function App() {
           onCancel={() => setOverlay(null)}
         />
       ) : null;
+    } else if (overlay.kind === "renameGroup") {
+      overlayNode = (
+        <RenameGroupForm
+          groupName={overlay.groupName}
+          onSubmit={(newName) => {
+            const normalized = newName === UNGROUPED ? undefined : newName;
+            setConfig((prev) => ({
+              ...prev,
+              workspaces: prev.workspaces.map((w) =>
+                (w.group?.trim() || UNGROUPED) === overlay.groupName
+                  ? { ...w, group: normalized }
+                  : w,
+              ),
+            }));
+            pendingSelect.current = { type: "group", name: newName };
+            setOverlay(null);
+            flash(`Renamed group to "${newName}"`);
+          }}
+          onCancel={() => setOverlay(null)}
+        />
+      );
+    } else if (overlay.kind === "confirmDeleteGroup") {
+      const count = groups.find((g) => g.name === overlay.groupName)?.workspaces.length ?? 0;
+      overlayNode = (
+        <ConfirmDialog
+          message={`Delete group "${overlay.groupName}" and all ${count} workspace(s) inside it?`}
+          onConfirm={() => {
+            setConfig((prev) => ({
+              ...prev,
+              workspaces: prev.workspaces.filter(
+                (w) => (w.group?.trim() || UNGROUPED) !== overlay.groupName,
+              ),
+            }));
+            setOverlay(null);
+            flash(`Deleted group "${overlay.groupName}"`);
+          }}
+          onCancel={() => setOverlay(null)}
+        />
+      );
     }
   }
 
@@ -410,19 +607,28 @@ export function App() {
           </Box>
         ) : (
           <>
-            <WorkspacePane
-              workspaces={config.workspaces}
-              selectedIndex={wsIndex}
-              active={pane === "workspaces"}
-              height={contentHeight}
-            />
+            {pane === "groups" ? (
+              <GroupPane
+                groups={groups}
+                selectedIndex={groupIndex}
+                active={pane === "groups"}
+                height={contentHeight}
+              />
+            ) : (
+              <WorkspaceListPane
+                groupName={currentGroup?.name}
+                workspaces={currentGroupWorkspaces}
+                selectedIndex={wsIndex}
+                active={pane === "workspaces"}
+                height={contentHeight}
+              />
+            )}
             <Box width={1} />
             <ItemPane
               workspace={currentWorkspace}
               selectedIndex={itemIndex}
               active={pane === "items"}
               height={contentHeight}
-              width={columns - 33}
             />
           </>
         )}
