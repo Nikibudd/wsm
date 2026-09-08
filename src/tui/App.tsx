@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
 import { loadConfig, saveConfig } from "../config.js";
-import { CONFIG_FILE } from "../paths.js";
+import { getConfigFile } from "../paths.js";
 import { loadState } from "../state.js";
 import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
@@ -83,7 +83,7 @@ function Header({ width }: { width: number }) {
       </Box>
       <Box flexShrink={1} flexGrow={0} minWidth={0}>
         <Text dimColor wrap="truncate-start">
-          {displayPath(CONFIG_FILE)}
+          {displayPath(getConfigFile())}
         </Text>
       </Box>
     </Box>
@@ -416,6 +416,12 @@ export function App() {
     if (messageTimer.current) clearTimeout(messageTimer.current);
     messageTimer.current = setTimeout(() => setMessage(null), 2500);
   };
+
+  useEffect(() => {
+    return () => {
+      if (messageTimer.current) clearTimeout(messageTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     saveConfig(config);

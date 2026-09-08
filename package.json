@@ -1,7 +1,7 @@
 {
   "name": "workspace-manager",
   "version": "1.0.0",
-  "description": "Fast CLI workspace switcher for coding projects",
+  "description": "Fast CLI/TUI workspace switcher for coding projects",
   "private": true,
   "type": "module",
   "bin": {
@@ -9,7 +9,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch"
   },
   "keywords": [],
   "author": "",
@@ -22,8 +24,16 @@
     "react": "^19.2.8"
   },
   "devDependencies": {
+    "@babel/core": "^8.0.1",
+    "@babel/preset-env": "^8.0.2",
+    "@babel/preset-react": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
+    "@types/jest": "^30.0.0",
     "@types/node": "^26.5.0",
     "@types/react": "^19.2.18",
+    "babel-jest": "^30.5.1",
+    "ink-testing-library": "^4.0.0",
+    "jest": "^30.5.1",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
   }

@@ -11,15 +11,22 @@ export function expandHome(p: string): string {
 }
 
 // WSM_CONFIG_DIR lets the config/state directory be overridden — used for
-// isolated testing so real user config is never touched by accident.
-const configDirOverride = process.env.WSM_CONFIG_DIR;
+// isolated testing so real user config is never touched by accident. Read
+// live (not cached at module-load time) so it can be changed between calls,
+// e.g. by tests that don't want to reset the whole module registry.
+export function getConfigDir(): string {
+  const override = process.env.WSM_CONFIG_DIR;
+  return override ? expandHome(override) : path.join(os.homedir(), ".config", "workspace-manager");
+}
 
-export const CONFIG_DIR = configDirOverride
-  ? expandHome(configDirOverride)
-  : path.join(os.homedir(), ".config", "workspace-manager");
-export const CONFIG_FILE = path.join(CONFIG_DIR, "config.yaml");
-export const STATE_FILE = path.join(CONFIG_DIR, "state.json");
+export function getConfigFile(): string {
+  return path.join(getConfigDir(), "config.yaml");
+}
+
+export function getStateFile(): string {
+  return path.join(getConfigDir(), "state.json");
+}
 
 export function ensureConfigDir(): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(getConfigDir(), { recursive: true });
 }

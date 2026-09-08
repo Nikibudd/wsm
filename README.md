@@ -13,6 +13,33 @@ npm run build
 npm link   # makes the `wsm` command available globally
 ```
 
+## Tests
+
+```bash
+npm test          # run once
+npm run test:watch
+```
+
+Jest runs in real ESM mode (`node --experimental-vm-modules`) rather than
+via `ts-jest`, since `ts-jest` doesn't yet support this project's TypeScript
+version. Source files are transpiled by `babel-jest` (types/JSX stripped
+only — `tsc` still does the real type-checking in `npm run build`). Tests
+never touch your real `~/.config/workspace-manager` — each one points
+`WSM_CONFIG_DIR` at a throwaway temp directory.
+
+- `test/paths.test.ts`, `test/config.test.ts`, `test/state.test.ts` — pure
+  file/env logic (defaults, malformed-file recovery, round-tripping).
+- `test/launcher.test.ts` — `open`/`close` behavior with `child_process`
+  mocked (interactive-shell invocation, cwd resolution incl. split layout,
+  close-command precedence, `--no-close` stacking) — no real processes are
+  ever spawned.
+- `test/app.test.tsx` — TUI interaction via
+  [`ink-testing-library`](https://github.com/vadimdemedes/ink-testing-library)
+  (simulated keypresses against the real component tree): workspace
+  creation, split-column navigation/deletion, group cascade-delete, the
+  open-workspace indicator, and a regression test for a keystroke-dropping
+  race that once existed in fast text input.
+
 ## Usage
 
 ```bash

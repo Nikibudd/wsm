@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { STATE_FILE, ensureConfigDir } from "./paths.js";
+import { getStateFile, ensureConfigDir } from "./paths.js";
 import type { State } from "./types.js";
 
 function defaultState(): State {
@@ -8,11 +8,12 @@ function defaultState(): State {
 
 export function loadState(): State {
   ensureConfigDir();
-  if (!fs.existsSync(STATE_FILE)) {
+  const stateFile = getStateFile();
+  if (!fs.existsSync(stateFile)) {
     return defaultState();
   }
   try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
+    const raw = fs.readFileSync(stateFile, "utf8");
     if (!raw.trim()) return defaultState();
     const parsed = JSON.parse(raw) as State;
     if (!parsed || !Array.isArray(parsed.sessions)) return defaultState();
@@ -24,5 +25,5 @@ export function loadState(): State {
 
 export function saveState(state: State): void {
   ensureConfigDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  fs.writeFileSync(getStateFile(), JSON.stringify(state, null, 2), "utf8");
 }
