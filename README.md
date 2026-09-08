@@ -33,7 +33,8 @@ with three levels of drill-down: **Groups → Workspaces → Items**.
 
 - Left pane starts on **Groups** (e.g. "Work", "Personal") — workspaces
   without a group show up under "Ungrouped". `enter`/`→` on a group reveals
-  the workspaces inside it; `←`/`esc` goes back up a level.
+  the workspaces inside it; `←`/`esc` goes back up a level. A green `●` marks
+  a group or workspace that's currently open (per `wsm status`).
 - `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
   lets you change/move a workspace's group) · `c` workspace settings (from
   the items pane) · `d` delete (with confirmation, cascades to everything
@@ -63,7 +64,10 @@ replaces the single directory with a **Frontend dir** and **Backend dir** —
 each item then gets a **Side** field (Frontend/Backend) that picks which
 folder it runs in by default (still overridable per item via `Directory`).
 This only shows up once you opt in; single-folder stays the default for new
-and existing workspaces.
+and existing workspaces. When split, the items pane renders as two side-by-side
+columns (Frontend | Backend) instead of one list — `←→` switches between them
+(or exits back to the workspace list from the frontend column), `↑↓` moves
+within the focused column, and `a` adds an item to whichever column has focus.
 
 ```yaml
 workspaces:
