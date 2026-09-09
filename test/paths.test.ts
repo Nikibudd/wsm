@@ -12,10 +12,12 @@ import {
 
 describe("paths", () => {
   const previousEnv = process.env.WSM_CONFIG_DIR;
+  const previousArgv1 = process.argv[1];
 
   afterEach(() => {
     if (previousEnv === undefined) delete process.env.WSM_CONFIG_DIR;
     else process.env.WSM_CONFIG_DIR = previousEnv;
+    process.argv[1] = previousArgv1;
   });
 
   test("expandHome expands ~ and ~/... but leaves other paths alone", () => {
@@ -35,9 +37,22 @@ describe("paths", () => {
     expect(getThemesFile()).toBe(path.join(expected, "themes.json"));
   });
 
-  test("without WSM_CONFIG_DIR, defaults to ~/.config/workspace-manager", () => {
+  test("without WSM_CONFIG_DIR, invoked as the real `wsm` binary, defaults to ~/.config/workspace-manager", () => {
     delete process.env.WSM_CONFIG_DIR;
+    process.argv[1] = "/opt/homebrew/bin/wsm";
     expect(getConfigDir()).toBe(path.join(os.homedir(), ".config", "workspace-manager"));
+  });
+
+  test("without WSM_CONFIG_DIR, invoked as anything other than exactly `wsm`, falls back to a separate dev config dir", () => {
+    // `wsmdev` (npm link during development), a direct `node dist/cli.js`,
+    // `tsx src/cli.ts` (npm run dev) — none of these should ever be able to
+    // touch the real ~/.config/workspace-manager just by someone forgetting
+    // to set WSM_CONFIG_DIR. Only the literal "wsm" binary name does.
+    delete process.env.WSM_CONFIG_DIR;
+    for (const invokedAs of ["/opt/homebrew/bin/wsmdev", "/some/path/dist/cli.js", "/repo/src/cli.ts"]) {
+      process.argv[1] = invokedAs;
+      expect(getConfigDir()).toBe(path.join(os.homedir(), ".config", "workspace-manager-dev"));
+    }
   });
 
   test("changing WSM_CONFIG_DIR between calls changes the result (no caching)", () => {

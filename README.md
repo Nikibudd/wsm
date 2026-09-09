@@ -10,8 +10,15 @@ down automatically as the new one opens.
 ```bash
 npm install
 npm run build
-npm link   # makes the `wsm` command available globally
+npm link   # makes the `wsmdev` command available globally
 ```
+
+`npm link` installs the command as `wsmdev`, not `wsm` — a locally-linked
+dev build and an installed release can coexist without clashing, and
+`wsmdev` automatically uses a separate `~/.config/workspace-manager-dev`
+config directory so testing changes can't touch your real config. Run
+`npm run build` again after any source change to pick it up; `npm link`
+itself only needs re-running if `package.json`'s `bin` field changes.
 
 ## Tests
 
