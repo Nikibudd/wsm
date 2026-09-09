@@ -132,11 +132,45 @@ describe("launcher", () => {
     });
 
     await launcher.openWorkspace("a", {});
-    await launcher.openWorkspace("b", { noClose: true });
+    await launcher.openWorkspace("b", { close: false });
 
     expect(killSpy).not.toHaveBeenCalled();
     const state = stateModule.loadState();
     expect(state.sessions.map((s) => s.workspace)).toEqual(["a", "b"]);
+  });
+
+  test("settings.defaultClose: false is respected with no explicit --close/--no-close flag", async () => {
+    seedConfig({
+      workspaces: [
+        { name: "a", items: [{ name: "x", type: "command", launch: "sleep 300" }] },
+        { name: "b", items: [{ name: "y", type: "command", launch: "sleep 300" }] },
+      ],
+      settings: { defaultClose: false },
+    });
+
+    await launcher.openWorkspace("a", {});
+    await launcher.openWorkspace("b", {});
+
+    expect(killSpy).not.toHaveBeenCalled();
+    const state = stateModule.loadState();
+    expect(state.sessions.map((s) => s.workspace)).toEqual(["a", "b"]);
+  });
+
+  test("an explicit --close overrides settings.defaultClose: false", async () => {
+    seedConfig({
+      workspaces: [
+        { name: "a", items: [{ name: "x", type: "command", launch: "sleep 300" }] },
+        { name: "b", items: [{ name: "y", type: "command", launch: "sleep 300" }] },
+      ],
+      settings: { defaultClose: false },
+    });
+
+    await launcher.openWorkspace("a", {});
+    await launcher.openWorkspace("b", { close: true });
+
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    const state = stateModule.loadState();
+    expect(state.sessions.map((s) => s.workspace)).toEqual(["b"]);
   });
 
   test("closeSession prefers an explicit close command, then closeAppName, then killing the pid", () => {
@@ -172,8 +206,8 @@ describe("launcher", () => {
         { name: "b", items: [{ name: "y", type: "command", launch: "sleep 300" }] },
       ],
     });
-    await launcher.openWorkspace("a", { noClose: true });
-    await launcher.openWorkspace("b", { noClose: true });
+    await launcher.openWorkspace("a", { close: false });
+    await launcher.openWorkspace("b", { close: false });
 
     await launcher.closeWorkspaces({ all: true });
 
@@ -187,8 +221,8 @@ describe("launcher", () => {
         { name: "b", items: [{ name: "y", type: "command", launch: "sleep 300" }] },
       ],
     });
-    await launcher.openWorkspace("a", { noClose: true });
-    await launcher.openWorkspace("b", { noClose: true });
+    await launcher.openWorkspace("a", { close: false });
+    await launcher.openWorkspace("b", { close: false });
 
     await launcher.closeWorkspaces({ name: "a" });
 
@@ -240,7 +274,7 @@ describe("launcher", () => {
       ],
     });
     await launcher.openWorkspace("mixed", {});
-    await launcher.openWorkspace("all-dead", { noClose: true });
+    await launcher.openWorkspace("all-dead", { close: false });
 
     const before = stateModule.loadState();
     const deadPid = before.sessions[0]!.items[1]!.pid!;
@@ -281,8 +315,8 @@ describe("launcher", () => {
         { name: "b", items: [{ name: "y", type: "command", launch: "sleep 300" }] },
       ],
     });
-    await launcher.openWorkspace("a", { noClose: true });
-    await launcher.openWorkspace("b", { noClose: true });
+    await launcher.openWorkspace("a", { close: false });
+    await launcher.openWorkspace("b", { close: false });
 
     await launcher.closeWorkspaces({});
 

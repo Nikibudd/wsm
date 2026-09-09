@@ -62,6 +62,7 @@ going forward.
 src/
   paths.ts       config/state file locations, ~ expansion
   types.ts       Config/Workspace/WorkspaceItem/Session/State shapes
+  jsonFile.ts    shared safe-load/save-JSON-file contract, used by state.ts and theme.ts
   config.ts      load/save ~/.config/workspace-manager/config.yaml
   state.ts       load/save ~/.config/workspace-manager/state.json (open sessions)
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
@@ -241,7 +242,53 @@ is, so it looks correct under any theme without needing its own color role.
   a real child process per test. The generated scripts shell out to
   `wsm list --names-only` at *completion* time (not script-generation time),
   so completions stay in sync with `config.yaml` without regenerating or
-  reinstalling the script.
+  reinstalling the script. The commands that take a workspace-name argument
+  (currently `open`/`close`) aren't hardcoded in the templates either — the
+  `completion` action derives them from each command's own
+  `registeredArguments` (commander's own argument metadata), so a future
+  command taking a workspace name picks up completion automatically instead
+  of needing both shell templates hand-edited.
+
+- **`state.ts`/`theme.ts` share one JSON-file contract via `jsonFile.ts`
+  (`readJsonFile`/`writeJsonFile`) — don't hand-roll a third copy.** Both
+  need "missing/empty/malformed file all fall back to a default, never
+  throw," and originally implemented it twice, nearly line-for-line. If a
+  future module needs the same JSON-file contract, use `jsonFile.ts`, not a
+  new copy. `config.ts` is intentionally separate — it's YAML, a different
+  parser/format, not a duplicate of this pattern.
+
+- **`openWorkspace(name, opts)` resolves `settings.defaultClose` itself now,
+  from the same `loadConfig()` call it already makes — `opts` is `{
+  close?: boolean }` (undefined = "use the configured default"), not the
+  older `{ noClose?: boolean }`.** Before, only `cli.ts` applied the
+  configured default (by pre-computing it and passing an inverted
+  `noClose`), so any other caller of `openWorkspace` would silently ignore
+  the user's `defaultClose` setting and always close by default. Keep the
+  resolution inside `openWorkspace` — don't push it back out to callers.
+
+- **`statusReport(state?)` takes an optional pre-loaded `State`** so
+  `wsm status` doesn't read+parse `state.json` twice when
+  `autoPruneStaleSessions` is on (once for `pruneDeadSessions`, again inside
+  `statusReport`). Omitting it still calls `loadState()` internally, so
+  existing no-arg callers/tests are unaffected — pass the state through
+  when you already have it loaded.
+
+- **`App.tsx`'s `rowStyle(selected, theme, fallbackColor?)` helper is the
+  one place the "selected row" color pair (`selectionText`/`selectionBg` vs.
+  a fallback) is computed.** It used to be copy-pasted at every selectable
+  row and every "+ Add …" row (7 call sites) with the theming diff
+  mechanically threading `theme.selectionText`/`selectionBg` through each
+  one. Add new selectable rows through this helper (spread `{...rowStyle(...)}` 
+  onto the `<Text>`), don't inline the ternary pair again.
+
+- **`theme.ts`'s `ThemeColors` type is derived from the runtime
+  `THEME_COLOR_ROLES` array (`Record<(typeof THEME_COLOR_ROLES)[number],
+  string>`), not a hand-written interface.** `ThemeColors` used to be a
+  plain interface with no runtime equivalent, so anything needing to
+  enumerate the roles (e.g. a test asserting every built-in theme defines
+  all of them) had to hardcode the list separately and could silently drift
+  from the type. Add new color roles to `THEME_COLOR_ROLES`, not to a
+  separate interface.
 
 ## Testing
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadThemes, saveThemes, getActiveTheme, DEFAULT_THEMES } from "../src/theme.js";
+import { loadThemes, saveThemes, getActiveTheme, DEFAULT_THEMES, THEME_COLOR_ROLES } from "../src/theme.js";
 import type { ThemesFile } from "../src/theme.js";
 
 describe("theme", () => {
@@ -35,20 +35,8 @@ describe("theme", () => {
   });
 
   test("every built-in theme defines all ThemeColors roles with non-empty values", () => {
-    const roles = [
-      "accent",
-      "border",
-      "borderActive",
-      "text",
-      "success",
-      "danger",
-      "typeApp",
-      "typeCommand",
-      "selectionBg",
-      "selectionText",
-    ] as const;
     for (const theme of DEFAULT_THEMES) {
-      for (const role of roles) {
+      for (const role of THEME_COLOR_ROLES) {
         expect(theme.colors[role]).toBeTruthy();
       }
     }
