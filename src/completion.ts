@@ -47,6 +47,13 @@ _wsm() {
   esac
 }
 
-_wsm
+# compdef only exists once \`autoload -Uz compinit && compinit\` has run.
+# Without that guard this errors with "command not found: compdef" on any
+# zsh setup that hasn't initialized the completion system yet.
+if (( \$+functions[compdef] )); then
+  compdef _wsm wsm
+else
+  print -u2 "wsm: zsh completion needs 'autoload -Uz compinit && compinit' run first (add it to your .zshrc before this line)."
+fi
 `;
 }
