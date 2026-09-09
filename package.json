@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "bundle": "node scripts/bundle.mjs",
     "dev": "tsx src/cli.ts",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch"
@@ -32,6 +33,7 @@
     "@types/node": "^26.5.0",
     "@types/react": "^19.2.18",
     "babel-jest": "^30.5.1",
+    "esbuild": "^0.28.2",
     "ink-testing-library": "^4.0.0",
     "jest": "^30.5.1",
     "tsx": "^4.23.13",
