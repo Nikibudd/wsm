@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, saveConfig, findWorkspace, workspaceNames } from "../src/config.js";
+import { loadConfig, saveConfig, findWorkspace, workspaceNames, getSettings } from "../src/config.js";
 import type { Config } from "../src/types.js";
 
 describe("config", () => {
@@ -95,5 +95,28 @@ describe("config", () => {
 
   test("workspaceNames returns an empty array for an empty config", () => {
     expect(workspaceNames({ workspaces: [] })).toEqual([]);
+  });
+
+  test("getSettings defaults to closing existing sessions and not auto-pruning, when unset", () => {
+    expect(getSettings({ workspaces: [] })).toEqual({
+      defaultClose: true,
+      autoPruneStaleSessions: false,
+    });
+  });
+
+  test("getSettings fills in defaults for keys the user hasn't overridden", () => {
+    expect(getSettings({ workspaces: [], settings: { autoPruneStaleSessions: true } })).toEqual({
+      defaultClose: true,
+      autoPruneStaleSessions: true,
+    });
+  });
+
+  test("saveConfig then loadConfig round-trips settings", () => {
+    const original: Config = {
+      workspaces: [],
+      settings: { defaultClose: false, autoPruneStaleSessions: true },
+    };
+    saveConfig(original);
+    expect(loadConfig()).toEqual(original);
   });
 });

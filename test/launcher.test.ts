@@ -223,6 +223,57 @@ describe("launcher", () => {
     expect(report).toContain(`dead-item [pid ${deadPid}] (not running)`);
   });
 
+  test("pruneDeadSessions drops only the dead items, and drops a session entirely once all its items are dead", async () => {
+    seedConfig({
+      workspaces: [
+        {
+          name: "mixed",
+          items: [
+            { name: "alive-item", type: "command", launch: "sleep 300" },
+            { name: "dead-item", type: "command", launch: "sleep 300" },
+          ],
+        },
+        {
+          name: "all-dead",
+          items: [{ name: "also-dead", type: "command", launch: "sleep 300" }],
+        },
+      ],
+    });
+    await launcher.openWorkspace("mixed", {});
+    await launcher.openWorkspace("all-dead", { noClose: true });
+
+    const before = stateModule.loadState();
+    const deadPid = before.sessions[0]!.items[1]!.pid!;
+    const allDeadPid = before.sessions[1]!.items[0]!.pid!;
+    killSpy.mockImplementation(((pid: number, signal?: string | number) => {
+      if (signal === 0 && (pid === deadPid || pid === allDeadPid)) throw new Error("ESRCH");
+      return true;
+    }) as typeof process.kill);
+
+    const { state: pruned, pruned: prunedList } = launcher.pruneDeadSessions(before);
+
+    expect(pruned.sessions).toHaveLength(1);
+    expect(pruned.sessions[0]!.workspace).toBe("mixed");
+    expect(pruned.sessions[0]!.items.map((i) => i.name)).toEqual(["alive-item"]);
+    expect(prunedList).toEqual([
+      { workspace: "mixed", item: "dead-item" },
+      { workspace: "all-dead", item: "also-dead" },
+    ]);
+  });
+
+  test("pruneDeadSessions is a no-op when every tracked pid is alive", async () => {
+    seedConfig({
+      workspaces: [{ name: "demo", items: [{ name: "x", type: "command", launch: "sleep 300" }] }],
+    });
+    await launcher.openWorkspace("demo", {});
+    const state = stateModule.loadState();
+
+    const { state: pruned, pruned: prunedList } = launcher.pruneDeadSessions(state);
+
+    expect(pruned).toEqual(state);
+    expect(prunedList).toEqual([]);
+  });
+
   test("closeWorkspaces() with no name/all closes only the most recently opened session", async () => {
     seedConfig({
       workspaces: [

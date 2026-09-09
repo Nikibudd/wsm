@@ -40,8 +40,16 @@ export interface Workspace {
   items: WorkspaceItem[];
 }
 
+export interface Settings {
+  /** Whether `wsm open` closes the currently open workspace(s) first by default. Override per-invocation with --close/--no-close. Default: true. */
+  defaultClose?: boolean;
+  /** Whether `wsm status` automatically drops session items whose tracked pid is no longer running, instead of just flagging them. Default: false. */
+  autoPruneStaleSessions?: boolean;
+}
+
 export interface Config {
   workspaces: Workspace[];
+  settings?: Settings;
 }
 
 export interface SessionItem {

@@ -2,12 +2,12 @@ import os from "node:os";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
-import { loadConfig, saveConfig } from "../config.js";
+import { getSettings, loadConfig, saveConfig } from "../config.js";
 import { getConfigFile } from "../paths.js";
 import { loadState } from "../state.js";
 import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
-import { ItemForm, RenameGroupForm, WorkspaceForm } from "./Form.js";
+import { ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 
 type Pane = "groups" | "workspaces" | "items";
@@ -19,7 +19,8 @@ type Overlay =
   | { kind: "confirmDeleteWorkspace"; workspaceName: string }
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
-  | { kind: "confirmDeleteGroup"; groupName: string };
+  | { kind: "confirmDeleteGroup"; groupName: string }
+  | { kind: "settings" };
 
 function displayPath(p: string): string {
   const home = os.homedir();
@@ -522,6 +523,8 @@ export function App() {
           setOverlay({ kind: "renameGroup", groupName: groups[groupIndex]!.name });
         } else if (input === "d" && groupIndex < groups.length) {
           setOverlay({ kind: "confirmDeleteGroup", groupName: groups[groupIndex]!.name });
+        } else if (input === "s") {
+          setOverlay({ kind: "settings" });
         }
         return;
       }
@@ -638,7 +641,7 @@ export function App() {
 
   const hint = useMemo(() => {
     if (pane === "groups") {
-      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · ● = open · q quit";
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · ● = open · q quit";
     }
     if (pane === "workspaces") {
       return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · ● = open · q quit";
@@ -772,6 +775,18 @@ export function App() {
             pendingSelect.current = { type: "group", name: newName };
             setOverlay(null);
             flash(`Renamed group to "${newName}"`);
+          }}
+          onCancel={() => setOverlay(null)}
+        />
+      );
+    } else if (overlay.kind === "settings") {
+      overlayNode = (
+        <SettingsForm
+          existing={getSettings(config)}
+          onSubmit={(settings) => {
+            setConfig((prev) => ({ ...prev, settings }));
+            setOverlay(null);
+            flash("Saved settings");
           }}
           onCancel={() => setOverlay(null)}
         />

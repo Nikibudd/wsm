@@ -249,4 +249,30 @@ describe("App (TUI)", () => {
     const config = readConfigYaml(tmpDir);
     expect(config.workspaces.map((w: any) => w.name)).toEqual(["c"]);
   });
+
+  test("pressing s from the groups pane opens Settings, and toggling+saving persists it", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    expect(lastFrame()).toContain("Settings");
+    expect(lastFrame()).toContain("Closes current workspace(s) first");
+
+    stdin.write(LEFT); // cycle the 2-option select the other way -> "Keeps them running"
+    await flush();
+    expect(lastFrame()).toContain("Keeps them running");
+
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(RIGHT); // "Flag only" -> "Auto-remove from state.json"
+    await flush();
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings).toEqual({ defaultClose: false, autoPruneStaleSessions: true });
+  });
 });

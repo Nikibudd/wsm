@@ -81,6 +81,17 @@ frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
 in which case each item picks a `side`. Single-folder is always the default;
 `layout` is omitted from saved config entirely unless split is chosen.
 
+Tool-wide behavior (as opposed to per-workspace config) lives in an optional
+top-level `settings:` key in the same `config.yaml` — not a separate file.
+`config.getSettings(config)` merges it with defaults (`defaultClose: true`,
+`autoPruneStaleSessions: false`) and is the only place that needs to know
+those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
+than reading `config.settings` directly, so a missing/partial `settings:`
+key never needs an `undefined` check at the call site. Edited via the TUI's
+Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
+`Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
+cycled with ←→) for each boolean rather than introducing a new field kind.
+
 ## Lessons learned (don't regress these)
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not

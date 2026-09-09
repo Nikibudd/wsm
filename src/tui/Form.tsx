@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
-import type { ItemSide, ItemType, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
+import type { ItemSide, ItemType, Settings, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
 
 export interface FieldOption {
   label: string;
@@ -413,6 +413,61 @@ export function WorkspaceForm({
         setError("");
         setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
       }}
+      onSubmit={handleSubmit}
+      onCancel={onCancel}
+    />
+  );
+}
+
+export function SettingsForm({
+  existing,
+  onSubmit,
+  onCancel,
+}: {
+  existing: Required<Settings>;
+  onSubmit: (result: Required<Settings>) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({
+    defaultClose: existing.defaultClose ? "close" : "keep",
+    autoPruneStaleSessions: existing.autoPruneStaleSessions ? "on" : "off",
+  });
+
+  const fields: FieldDef[] = [
+    {
+      key: "defaultClose",
+      label: "wsm open",
+      kind: "select",
+      options: [
+        { label: "Closes current workspace(s) first", value: "close" },
+        { label: "Keeps them running (--no-close)", value: "keep" },
+      ],
+    },
+    {
+      key: "autoPruneStaleSessions",
+      label: "Dead sessions",
+      kind: "select",
+      options: [
+        { label: "Flag only, in wsm status", value: "off" },
+        { label: "Auto-remove from state.json", value: "on" },
+      ],
+    },
+  ];
+
+  const handleSubmit = () => {
+    onSubmit({
+      defaultClose: values.defaultClose === "close",
+      autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
+    });
+  };
+
+  return (
+    <Form
+      title="Settings"
+      fields={fields}
+      values={values}
+      submitLabel="save"
+      onChange={(k, updater) => setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }))}
       onSubmit={handleSubmit}
       onCancel={onCancel}
     />
