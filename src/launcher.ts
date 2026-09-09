@@ -143,6 +143,16 @@ export async function openWorkspace(name: string, opts: { noClose?: boolean }): 
   console.log(`Workspace "${name}" is open (${items.length} item(s)).`);
 }
 
+function isPidAlive(pid: number): boolean {
+  try {
+    // Signal 0 sends nothing but still throws (ESRCH) if the pid is gone.
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function statusReport(): string {
   const state = loadState();
   if (state.sessions.length === 0) return "No workspaces currently open.";
@@ -150,7 +160,9 @@ export function statusReport(): string {
   for (const session of state.sessions) {
     lines.push(`• ${session.workspace} (opened ${session.openedAt})`);
     for (const item of session.items) {
-      lines.push(`    - ${item.name}${item.pid ? ` [pid ${item.pid}]` : ""}`);
+      const pidInfo = item.pid ? ` [pid ${item.pid}]` : "";
+      const stale = item.pid && !isPidAlive(item.pid) ? " (not running)" : "";
+      lines.push(`    - ${item.name}${pidInfo}${stale}`);
     }
   }
   return lines.join("\n");
