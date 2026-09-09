@@ -374,3 +374,12 @@ npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs
 npm link        # expose `wsm` globally — only needs re-running if package.json's
                 # bin field or package name changes, not after ordinary edits
 ```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR targeting `develop`: `npm ci` →
+`npm run build` → `npm test`. The build step is there for a reason beyond
+"does it compile" — `babel-jest` (see Testing above) strips TypeScript types
+without checking them, so `npm test` passing on its own does **not** mean
+`tsc` would succeed. A type error can pass the whole test suite and only get
+caught by the separate `npm run build` step, in CI or locally.
