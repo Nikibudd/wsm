@@ -5,6 +5,7 @@ import { loadConfig, workspaceNames, getSettings } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
 import { bashCompletionScript, zshCompletionScript } from "./completion.js";
+import { fetchLatestRelease, downloadAsset, canSelfUpdate, installUpdate } from "./update.js";
 // Real ESM JSON import, not a hardcoded version string — this also has to
 // work standalone-bundled (release/wsm.mjs ships with no package.json next
 // to it): esbuild resolves/inlines JSON imports at *bundle* time, so the
@@ -102,6 +103,34 @@ program
       console.log(zshCompletionScript(commandNames, nameArgCommands));
     } else {
       console.error(`Unsupported shell "${shell}". Expected "bash" or "zsh".`);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("update")
+  .description("Download and install the latest release, replacing this binary")
+  .action(async () => {
+    const guard = canSelfUpdate(process.argv[1]);
+    if (!guard.ok) {
+      console.error(guard.reason);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      console.log(`Current version: ${pkg.version}`);
+      console.log("Checking for the latest release...");
+      const latest = await fetchLatestRelease();
+      if (latest.version === pkg.version) {
+        console.log(`Already up to date (${pkg.version}).`);
+        return;
+      }
+      console.log(`Downloading v${latest.version}...`);
+      const data = await downloadAsset(latest.downloadUrl);
+      installUpdate(process.argv[1]!, data);
+      console.log(`Updated to v${latest.version}.`);
+    } catch (err) {
+      console.error((err as Error).message);
       process.exitCode = 1;
     }
   });

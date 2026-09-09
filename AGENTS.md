@@ -496,3 +496,27 @@ JSON imports at *bundle* time — the bundled output embeds whatever
 Confirmed by running the bundled binary from a directory with no
 `package.json` anywhere nearby. Needs `resolveJsonModule: true` in
 `tsconfig.json` for `tsc` to accept it.
+
+**`wsm update` (`src/update.ts`) requires the GitHub repo to be public.** It
+hits `https://api.github.com/repos/Nikibudd/wsm/releases/latest`
+unauthenticated (no `gh` CLI, no token) — deliberately, so it works for
+anyone who downloaded a release, not just people with `gh` set up. A private
+repo makes this endpoint 404 for an unauthenticated request (GitHub does
+this on purpose, to avoid leaking a private repo's existence to
+unauthorized callers) — confirmed by hitting the real 404 while the repo
+was still private, then re-verifying the full real fetch → download →
+atomic-install pipeline against live GitHub infrastructure once it went
+public. If the repo is ever made private again, `wsm update` breaks for
+everyone with no useful error beyond "404" — there is no token embedded in
+the distributed binary to fall back to (and there shouldn't be one; baking
+a credential into something anyone can download and extract is not an
+option here).
+
+`canSelfUpdate()` guards against `wsm update` ever running against
+`wsmdev`: only a real, non-symlinked file literally named `wsm` qualifies.
+`wsmdev` is always a symlink into this repo's `dist/cli.js` (via `npm
+link`) — without this guard, `installUpdate()`'s write would follow the
+symlink and silently overwrite a tracked source file in the repo with a
+downloaded release binary. The two checks (name, then not-a-symlink) are
+both necessary — name alone doesn't catch a hypothetical `wsm` symlink, and
+symlink-check alone doesn't catch `wsmdev`'s different name.
