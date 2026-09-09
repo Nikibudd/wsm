@@ -10,13 +10,31 @@ export function expandHome(p: string): string {
   return p;
 }
 
+// `wsm` and `wsmdev` are the same dist/cli.js, symlinked under two names
+// (release install vs. `npm link` during development) — process.argv[1]
+// preserves the literal invoked path, not the symlink's realpath, so this
+// reliably tells them apart even though they're the exact same file.
+function invokedCommandName(): string {
+  const argv1 = process.argv[1];
+  return argv1 ? path.basename(argv1) : "";
+}
+
 // WSM_CONFIG_DIR lets the config/state directory be overridden — used for
 // isolated testing so real user config is never touched by accident. Read
 // live (not cached at module-load time) so it can be changed between calls,
 // e.g. by tests that don't want to reset the whole module registry.
+//
+// Below that override, only the literal "wsm" binary name touches the real
+// ~/.config/workspace-manager. Anything else — "wsmdev" (npm link during
+// development), a direct `node dist/cli.js`, `tsx src/cli.ts` (npm run dev)
+// — falls back to a separate ~/.config/workspace-manager-dev sandbox, so a
+// locally-linked dev build can never touch daily-driver config just by
+// someone forgetting to set WSM_CONFIG_DIR. See AGENTS.md.
 export function getConfigDir(): string {
   const override = process.env.WSM_CONFIG_DIR;
-  return override ? expandHome(override) : path.join(os.homedir(), ".config", "workspace-manager");
+  if (override) return expandHome(override);
+  const dirName = invokedCommandName() === "wsm" ? "workspace-manager" : "workspace-manager-dev";
+  return path.join(os.homedir(), ".config", dirName);
 }
 
 export function getConfigFile(): string {

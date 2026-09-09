@@ -1,11 +1,11 @@
 {
   "name": "workspace-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Fast CLI/TUI workspace switcher for coding projects",
   "private": true,
   "type": "module",
   "bin": {
-    "wsm": "dist/cli.js"
+    "wsmdev": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",

@@ -32,6 +32,17 @@ this project's history, where merging feature branches into `develop`
 directly (no PR) was the norm — don't follow that older pattern now that
 it's been explicitly overridden.
 
+**Don't switch back to `develop` after finishing a task — leave the working
+directory on the feature branch you just created/committed to.** Since the
+user is the one who pushes (see above), switching back to `develop` just
+means they have to `git checkout` the feature branch themselves before they
+can push it — pure friction, no benefit. Staying on the feature branch is
+also correct when picking a task back up or stacking related work: check
+whether an unmerged feature branch already covers the topic (or is a
+sensible base for it, like `feature/readme-restructure-install-vs-
+contributing` was built on `feature/dev-vs-release-command-and-config`)
+before branching fresh from `develop` again.
+
 The history was reconstructed after the fact — the code across several early
 features was actually written in one continuous session with nothing
 committed, then split into per-feature branches/commits afterward to look
@@ -204,6 +215,34 @@ is, so it looks correct under any theme without needing its own color role.
   `WSM_CONFIG_DIR` at a throwaway temp directory. This matters doubly here
   because the user has real, hand-built config in there.
 
+  This is now also structurally enforced, not just discipline: `wsm` and
+  `wsmdev` are the exact same `dist/cli.js`, symlinked under two names —
+  `package.json`'s `bin` field only declares `"wsmdev"`, so `npm link` (the
+  dev workflow) never creates anything named `wsm`; the real `wsm` name is
+  reserved for an installed release build (see README's "From a release").
+  `paths.ts`'s `getConfigDir()` reads `process.argv[1]`'s basename (the
+  *invoked* symlink name — confirmed this isn't realpath-resolved, so `wsm`
+  vs `wsmdev` are reliably distinguishable despite being the same file) and
+  only uses the real `~/.config/workspace-manager` when invoked as exactly
+  `"wsm"`; anything else — `wsmdev`, a direct `node dist/cli.js`, `tsx
+  src/cli.ts` (`npm run dev`) — falls back to a separate
+  `~/.config/workspace-manager-dev` sandbox. `WSM_CONFIG_DIR` still
+  overrides both, top priority, unchanged (tests always set it, so this
+  default-selection logic never fires under test). Point: a locally-linked
+  dev build now can't touch daily-driver config just because someone forgot
+  to set `WSM_CONFIG_DIR` — the default itself is safe.
+
+  **When manually verifying a change against the real CLI, invoke it as
+  `wsmdev`, never bare `wsm`.** This is sharper than the config-safety point
+  above: the user's real `wsm` is a separate, already-downloaded release
+  binary (`~/.local/bin/wsm` or similar — see README's "From a release"),
+  completely disconnected from this repo. Running `npm run build` never
+  touches it, and running bare `wsm` during development doesn't fail or
+  warn — it silently runs whatever unrelated code that release happens to
+  contain and reports success, giving false confidence that a change works
+  when it was never actually exercised. `wsmdev` is the only invocation that
+  reflects the current `dist/cli.js` build.
+
 - **`loadConfig()`/`loadState()` must never throw** on a missing, empty, or
   malformed file — always fall back to the default shape. (`loadConfig` was
   missing this for a while; `loadState` had it from the start. Keep them
@@ -221,15 +260,17 @@ is, so it looks correct under any theme without needing its own color role.
   ever add UI/validation around item close config, flag this combination
   rather than silently honoring the priority order.
 
-- **The globally-linked `wsm` runs compiled `dist/cli.js`, not `src/`.**
-  Editing source has zero effect on the real `wsm` command (the one the user
-  runs for actual daily switching) until `npm run build` completes. This
-  isn't just a "remember to build" note — `wsm` is the user's real daily
-  driver, so testing against a stale build after a source edit means
-  silently verifying old behavior and concluding a fix works when it hasn't
+- **The globally-linked `wsmdev` runs compiled `dist/cli.js`, not `src/`.**
+  Editing source has zero effect on `wsmdev` until `npm run build`
+  completes — test against a stale build after a source edit and you're
+  silently verifying old behavior, concluding a fix works when it hasn't
   been exercised at all. `npm link` itself only needs re-running if
   `package.json`'s `bin` field or package name changes, which is rare —
-  don't confuse the two steps.
+  don't confuse the two steps. Separately: `wsm` (if the user has a release
+  installed — see README's "From a release") is a distinct, independent
+  file, not something building this repo touches at all — don't assume
+  `npm run build` affects the user's `wsm` command the way it used to
+  before the `wsm`/`wsmdev` split (see the config-dir note above).
 
 - **A tracked `SessionItem.pid` is the *launcher shell's* pid, not
   necessarily the thing the launch command started — for anything that
@@ -378,11 +419,11 @@ a gap worth closing, not as the normal workflow.
 
 ```bash
 npm run build   # tsc -> dist/, chmod +x dist/cli.js — run this after every
-                # src/ change before testing the real `wsm` command
+                # src/ change before testing the real `wsmdev` command
 npm run bundle  # dist/ -> release/wsm.mjs, a single self-contained file
                 # (esbuild). Run `npm run build` first — see Releases below
-npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs)
-npm link        # expose `wsm` globally — only needs re-running if package.json's
+npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsmdev` runs)
+npm link        # expose `wsmdev` globally — only needs re-running if package.json's
                 # bin field or package name changes, not after ordinary edits
 ```
 
@@ -435,4 +476,23 @@ into `main` that should produce a new release.** If you merge a PR without
 bumping the version, the release step fails on purpose (`gh release create`
 errors on a tag that already exists) rather than silently overwriting or
 skipping — that failure is the intended signal to go bump the version, not
-a bug to route around.
+a bug to route around. Use `npm version <x.y.z> --no-git-tag-version` to
+bump both `package.json` and `package-lock.json` consistently in one step
+without npm's own auto-commit/auto-tag behavior getting in the way.
+
+`wsm --version` reads this same field — `cli.ts` imports `package.json`
+directly (`import pkg from "../package.json" with { type: "json" }`), it
+does **not** hardcode a version string. It used to (`.version("1.0.0")`
+literally in source), silently drifting from `package.json` — caught when a
+1.1.0 bump still printed `1.0.0` from the freshly-built bundle. This import
+form is deliberate, not incidental: it has to work correctly in all three
+ways `wsm` runs — `tsx src/cli.ts`, compiled `dist/cli.js`, and the
+standalone bundled `release/wsm.mjs`, which ships with **no** `package.json`
+next to it at all. A runtime `fs.readFileSync` relative to the module's own
+path (the seemingly-obvious fix) would work for the first two but break the
+third. The JSON import works for all three because esbuild resolves/inlines
+JSON imports at *bundle* time — the bundled output embeds whatever
+`package.json` said as of `npm run bundle`, no runtime file read involved.
+Confirmed by running the bundled binary from a directory with no
+`package.json` anywhere nearby. Needs `resolveJsonModule: true` in
+`tsconfig.json` for `tsc` to accept it.
