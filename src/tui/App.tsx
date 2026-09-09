@@ -6,7 +6,7 @@ import { getSettings, loadConfig, saveConfig } from "../config.js";
 import { getConfigFile } from "../paths.js";
 import { loadState } from "../state.js";
 import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
-import type { ThemesFile } from "../theme.js";
+import type { ThemeColors, ThemesFile } from "../theme.js";
 import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
 import { ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
@@ -28,6 +28,21 @@ type Overlay =
 function displayPath(p: string): string {
   const home = os.homedir();
   return p.startsWith(home) ? "~" + p.slice(home.length) : p;
+}
+
+// The "this row is the highlighted one" color pair, repeated across every
+// selectable row/pane (group list, workspace list, item rows, every "+ Add
+// …" row): selected text/background swap to the theme's selection colors,
+// unselected falls back to whatever color the row would otherwise use.
+function rowStyle(
+  selected: boolean,
+  theme: ThemeColors,
+  fallbackColor: string = theme.text,
+): { color: string; backgroundColor: string | undefined } {
+  return {
+    color: selected ? theme.selectionText : fallbackColor,
+    backgroundColor: selected ? theme.selectionBg : undefined,
+  };
 }
 
 type PendingSelect = { type: "group"; name: string } | { type: "workspace"; name: string };
@@ -149,23 +164,16 @@ function GroupPane({
           const count = g.workspaces.length;
           const hasOpen = g.workspaces.some((w) => openNames.has(w.name));
           return (
-            <Text
-              key={g.name}
-              color={selected ? theme.selectionText : theme.text}
-              backgroundColor={selected ? theme.selectionBg : undefined}
-            >
+            <Text key={g.name} {...rowStyle(selected, theme)}>
               {selected ? "› " : "  "}
-              {hasOpen ? <Text color={selected ? theme.selectionText : theme.success}>● </Text> : "  "}
+              {hasOpen ? <Text color={rowStyle(selected, theme, theme.success).color}>● </Text> : "  "}
               {g.name} ({count})
             </Text>
           );
         })
       )}
       <Box height={1} />
-      <Text
-        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
-        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
-      >
+      <Text {...rowStyle(active && selectedIndex === addRowIndex, theme, theme.success)}>
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ New workspace
       </Text>
     </Box>
@@ -209,23 +217,16 @@ function WorkspaceListPane({
           const selected = active && i === selectedIndex;
           const isOpen = openNames.has(w.name);
           return (
-            <Text
-              key={w.name}
-              color={selected ? theme.selectionText : theme.text}
-              backgroundColor={selected ? theme.selectionBg : undefined}
-            >
+            <Text key={w.name} {...rowStyle(selected, theme)}>
               {selected ? "› " : "  "}
-              {isOpen ? <Text color={selected ? theme.selectionText : theme.success}>● </Text> : "  "}
+              {isOpen ? <Text color={rowStyle(selected, theme, theme.success).color}>● </Text> : "  "}
               {w.name} ({w.items.length})
             </Text>
           );
         })
       )}
       <Box height={1} />
-      <Text
-        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
-        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
-      >
+      <Text {...rowStyle(active && selectedIndex === addRowIndex, theme, theme.success)}>
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ New workspace
       </Text>
     </Box>
@@ -242,12 +243,9 @@ function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean })
       : "kill process";
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text
-        color={selected ? theme.selectionText : theme.text}
-        backgroundColor={selected ? theme.selectionBg : undefined}
-      >
+      <Text {...rowStyle(selected, theme)}>
         {selected ? "› " : "  "}
-        {item.name} <Text color={selected ? theme.selectionText : typeColor}>[{item.type}]</Text>
+        {item.name} <Text color={rowStyle(selected, theme, typeColor).color}>[{item.type}]</Text>
       </Text>
       <Text dimColor wrap="truncate-end">
         {"    "}launch: {item.launch}
@@ -295,10 +293,7 @@ function SideColumn({
           <ItemRow key={item.name + i} item={item} selected={active && i === selectedIndex} />
         ))
       )}
-      <Text
-        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
-        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
-      >
+      <Text {...rowStyle(active && selectedIndex === addRowIndex, theme, theme.success)}>
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add item
       </Text>
     </Box>
@@ -397,12 +392,7 @@ function ItemPane({
               <ItemRow key={item.name + i} item={item} selected={active && i === selectedIndex} />
             ))
           )}
-          <Text
-            color={active && selectedIndex === workspace.items.length ? theme.selectionText : theme.success}
-            backgroundColor={
-              active && selectedIndex === workspace.items.length ? theme.selectionBg : undefined
-            }
-          >
+          <Text {...rowStyle(active && selectedIndex === workspace.items.length, theme, theme.success)}>
             {active && selectedIndex === workspace.items.length ? "› " : "  "}+ Add item
           </Text>
         </>

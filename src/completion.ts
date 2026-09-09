@@ -3,8 +3,9 @@
 // workspace names statically, so completions stay in sync with
 // config.yaml without needing the script to be regenerated.
 
-export function bashCompletionScript(commands: string[]): string {
+export function bashCompletionScript(commands: string[], nameArgCommands: string[]): string {
   const commandList = commands.join(" ");
+  const nameArgPattern = nameArgCommands.join("|");
   return `_wsm_completions() {
   local cur prev
   cur="\${COMP_WORDS[COMP_CWORD]}"
@@ -16,7 +17,7 @@ export function bashCompletionScript(commands: string[]): string {
   fi
 
   case "\${prev}" in
-    open|close)
+    ${nameArgPattern})
       COMPREPLY=( $(compgen -W "$(wsm list --names-only 2>/dev/null)" -- "\${cur}") )
       ;;
   esac
@@ -25,8 +26,9 @@ complete -F _wsm_completions wsm
 `;
 }
 
-export function zshCompletionScript(commands: string[]): string {
+export function zshCompletionScript(commands: string[], nameArgCommands: string[]): string {
   const commandList = commands.map((c) => `'${c}'`).join(" ");
+  const nameArgPattern = nameArgCommands.join("|");
   return `#compdef wsm
 
 _wsm() {
@@ -39,7 +41,7 @@ _wsm() {
   fi
 
   case "\${words[2]}" in
-    open|close)
+    ${nameArgPattern})
       local -a workspaces
       workspaces=(\${(f)"$(wsm list --names-only 2>/dev/null)"})
       _describe 'workspace' workspaces

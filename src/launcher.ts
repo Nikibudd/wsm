@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { expandHome } from "./paths.js";
 import { loadState, saveState } from "./state.js";
-import { loadConfig, findWorkspace } from "./config.js";
+import { loadConfig, findWorkspace, getSettings } from "./config.js";
 import type { Session, SessionItem, State, Workspace, WorkspaceItem } from "./types.js";
 
 function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
@@ -111,15 +111,16 @@ export async function closeWorkspaces(opts: { name?: string; all?: boolean }): P
   saveState({ sessions: remaining });
 }
 
-export async function openWorkspace(name: string, opts: { noClose?: boolean }): Promise<void> {
+export async function openWorkspace(name: string, opts: { close?: boolean }): Promise<void> {
   const config = loadConfig();
   const workspace = findWorkspace(config, name);
   if (!workspace) {
     throw new Error(`No workspace named "${name}" found. Run "wsm" to configure one.`);
   }
+  const shouldClose = opts.close ?? getSettings(config).defaultClose;
 
   const state = loadState();
-  if (!opts.noClose && state.sessions.length > 0) {
+  if (shouldClose && state.sessions.length > 0) {
     for (const session of state.sessions) closeSession(session);
     state.sessions = [];
   }
@@ -165,14 +166,12 @@ export function pruneDeadSessions(state: State): {
       if (!alive) pruned.push({ workspace: session.workspace, item: item.name });
       return alive;
     });
-    if (items.length > 0) sessions.push(items.length === session.items.length ? session : { ...session, items });
+    if (items.length > 0) sessions.push({ ...session, items });
   }
-  if (pruned.length === 0) return { state, pruned };
   return { state: { sessions }, pruned };
 }
 
-export function statusReport(): string {
-  const state = loadState();
+export function statusReport(state: State = loadState()): string {
   if (state.sessions.length === 0) return "No workspaces currently open.";
   const lines: string[] = [];
   for (const session of state.sessions) {

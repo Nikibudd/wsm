@@ -25,9 +25,7 @@ program
   )
   .action(async (name: string, options: { close?: boolean }) => {
     try {
-      const settings = getSettings(loadConfig());
-      const shouldClose = options.close ?? settings.defaultClose;
-      await openWorkspace(name, { noClose: !shouldClose });
+      await openWorkspace(name, { close: options.close });
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;
@@ -67,14 +65,16 @@ program
   .description("Show currently open workspace(s)")
   .action(() => {
     const settings = getSettings(loadConfig());
+    let state = loadState();
     if (settings.autoPruneStaleSessions) {
-      const { state, pruned } = pruneDeadSessions(loadState());
-      if (pruned.length > 0) {
+      const result = pruneDeadSessions(state);
+      state = result.state;
+      if (result.pruned.length > 0) {
         saveState(state);
-        for (const p of pruned) console.log(`Pruned stale session item: ${p.workspace} › ${p.item}`);
+        for (const p of result.pruned) console.log(`Pruned stale session item: ${p.workspace} › ${p.item}`);
       }
     }
-    console.log(statusReport());
+    console.log(statusReport(state));
   });
 
 program
@@ -82,10 +82,16 @@ program
   .description("Print a shell completion script for bash or zsh (eval it in your rc file)")
   .action((shell: string) => {
     const commandNames = program.commands.map((c) => c.name());
+    // Derived from each command's own declared arguments (rather than
+    // hardcoded in the completion templates) so a future command taking a
+    // workspace name picks up name-completion automatically.
+    const nameArgCommands = program.commands
+      .filter((c) => c.registeredArguments.some((a) => a.name() === "name"))
+      .map((c) => c.name());
     if (shell === "bash") {
-      console.log(bashCompletionScript(commandNames));
+      console.log(bashCompletionScript(commandNames, nameArgCommands));
     } else if (shell === "zsh") {
-      console.log(zshCompletionScript(commandNames));
+      console.log(zshCompletionScript(commandNames, nameArgCommands));
     } else {
       console.error(`Unsupported shell "${shell}". Expected "bash" or "zsh".`);
       process.exitCode = 1;

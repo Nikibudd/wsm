@@ -1,22 +1,28 @@
-import fs from "node:fs";
-import { getThemesFile, ensureConfigDir } from "./paths.js";
+import { getThemesFile } from "./paths.js";
+import { readJsonFile, writeJsonFile } from "./jsonFile.js";
 
-// Semantic color roles used across the TUI. Muted/secondary text still uses
-// Ink's `dimColor` modifier rather than a themed color — dimming whatever
-// the terminal's default foreground is looks correct under any theme, so it
-// doesn't need its own themed role.
-export interface ThemeColors {
-  accent: string;
-  border: string;
-  borderActive: string;
-  text: string;
-  success: string;
-  danger: string;
-  typeApp: string;
-  typeCommand: string;
-  selectionBg: string;
-  selectionText: string;
-}
+// Semantic color roles used across the TUI. This array is the single source
+// of truth for what a theme must define — ThemeColors is derived from it
+// (rather than a hand-written interface a runtime check could drift from),
+// and anything that needs to enumerate the roles (e.g. validating a theme
+// defines all of them) should read this array, not repeat the list.
+// Muted/secondary text still uses Ink's `dimColor` modifier rather than a
+// themed color — dimming whatever the terminal's default foreground is
+// looks correct under any theme, so it doesn't need its own themed role.
+export const THEME_COLOR_ROLES = [
+  "accent",
+  "border",
+  "borderActive",
+  "text",
+  "success",
+  "danger",
+  "typeApp",
+  "typeCommand",
+  "selectionBg",
+  "selectionText",
+] as const;
+
+export type ThemeColors = Record<(typeof THEME_COLOR_ROLES)[number], string>;
 
 export interface Theme {
   name: string;
@@ -157,31 +163,24 @@ function withMissingBuiltins(file: ThemesFile): ThemesFile {
   return { ...file, themes: [...file.themes, ...missing] };
 }
 
+function isThemesFile(value: unknown): value is ThemesFile {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    Array.isArray((value as ThemesFile).themes) &&
+    (value as ThemesFile).themes.length > 0
+  );
+}
+
 // New custom themes can be added by hand-editing themes.json (appending to
 // `themes` and pointing `activeTheme` at the new entry) — there's no
 // in-TUI theme creator, only switching between whatever's in the file.
 export function loadThemes(): ThemesFile {
-  ensureConfigDir();
-  const file = getThemesFile();
-  if (!fs.existsSync(file)) {
-    return defaultThemesFile();
-  }
-  try {
-    const raw = fs.readFileSync(file, "utf8");
-    if (!raw.trim()) return defaultThemesFile();
-    const parsed = JSON.parse(raw) as ThemesFile | undefined;
-    if (!parsed || !Array.isArray(parsed.themes) || parsed.themes.length === 0) {
-      return defaultThemesFile();
-    }
-    return withMissingBuiltins(parsed);
-  } catch {
-    return defaultThemesFile();
-  }
+  return withMissingBuiltins(readJsonFile(getThemesFile(), isThemesFile, defaultThemesFile));
 }
 
 export function saveThemes(themesFile: ThemesFile): void {
-  ensureConfigDir();
-  fs.writeFileSync(getThemesFile(), JSON.stringify(themesFile, null, 2), "utf8");
+  writeJsonFile(getThemesFile(), themesFile);
 }
 
 export function getActiveTheme(themesFile: ThemesFile): Theme {
