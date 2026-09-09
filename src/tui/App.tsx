@@ -5,10 +5,13 @@ import Gradient from "ink-gradient";
 import { getSettings, loadConfig, saveConfig } from "../config.js";
 import { getConfigFile } from "../paths.js";
 import { loadState } from "../state.js";
+import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
+import type { ThemesFile } from "../theme.js";
 import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
 import { ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
+import { ThemeProvider, useTheme } from "./ThemeContext.js";
 
 type Pane = "groups" | "workspaces" | "items";
 
@@ -69,10 +72,11 @@ function useTerminalSize() {
 }
 
 function Header({ width }: { width: number }) {
+  const theme = useTheme();
   return (
     <Box
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={theme.accent}
       paddingX={1}
       width={width}
       justifyContent="space-between"
@@ -92,6 +96,7 @@ function Header({ width }: { width: number }) {
 }
 
 function Footer({ hint, message, width }: { hint: string; message: string | null; width: number }) {
+  const theme = useTheme();
   return (
     <Box paddingX={1} width={width}>
       <Box flexGrow={1} flexShrink={1}>
@@ -101,7 +106,7 @@ function Footer({ hint, message, width }: { hint: string; message: string | null
       </Box>
       {message ? (
         <Box flexShrink={0}>
-          <Text color="green">{message}</Text>
+          <Text color={theme.success}>{message}</Text>
         </Box>
       ) : null}
     </Box>
@@ -121,6 +126,7 @@ function GroupPane({
   height: number;
   openNames: Set<string>;
 }) {
+  const theme = useTheme();
   const addRowIndex = groups.length;
   return (
     <Box
@@ -128,10 +134,10 @@ function GroupPane({
       width={32}
       height={height}
       borderStyle="round"
-      borderColor={active ? "cyan" : "gray"}
+      borderColor={active ? theme.borderActive : theme.border}
       paddingX={1}
     >
-      <Text bold underline color={active ? "cyan" : "white"}>
+      <Text bold underline color={active ? theme.accent : theme.text}>
         Groups
       </Text>
       <Box height={1} />
@@ -145,11 +151,11 @@ function GroupPane({
           return (
             <Text
               key={g.name}
-              color={selected ? "black" : "white"}
-              backgroundColor={selected ? "cyan" : undefined}
+              color={selected ? theme.selectionText : theme.text}
+              backgroundColor={selected ? theme.selectionBg : undefined}
             >
               {selected ? "› " : "  "}
-              {hasOpen ? <Text color={selected ? "black" : "green"}>● </Text> : "  "}
+              {hasOpen ? <Text color={selected ? theme.selectionText : theme.success}>● </Text> : "  "}
               {g.name} ({count})
             </Text>
           );
@@ -157,8 +163,8 @@ function GroupPane({
       )}
       <Box height={1} />
       <Text
-        color={active && selectedIndex === addRowIndex ? "black" : "green"}
-        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
+        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
+        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
       >
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ New workspace
       </Text>
@@ -181,6 +187,7 @@ function WorkspaceListPane({
   height: number;
   openNames: Set<string>;
 }) {
+  const theme = useTheme();
   const addRowIndex = workspaces.length;
   return (
     <Box
@@ -188,10 +195,10 @@ function WorkspaceListPane({
       width={32}
       height={height}
       borderStyle="round"
-      borderColor={active ? "cyan" : "gray"}
+      borderColor={active ? theme.borderActive : theme.border}
       paddingX={1}
     >
-      <Text bold underline color={active ? "cyan" : "white"} wrap="truncate-end">
+      <Text bold underline color={active ? theme.accent : theme.text} wrap="truncate-end">
         Groups › {groupName ?? "—"}
       </Text>
       <Box height={1} />
@@ -204,11 +211,11 @@ function WorkspaceListPane({
           return (
             <Text
               key={w.name}
-              color={selected ? "black" : "white"}
-              backgroundColor={selected ? "cyan" : undefined}
+              color={selected ? theme.selectionText : theme.text}
+              backgroundColor={selected ? theme.selectionBg : undefined}
             >
               {selected ? "› " : "  "}
-              {isOpen ? <Text color={selected ? "black" : "green"}>● </Text> : "  "}
+              {isOpen ? <Text color={selected ? theme.selectionText : theme.success}>● </Text> : "  "}
               {w.name} ({w.items.length})
             </Text>
           );
@@ -216,8 +223,8 @@ function WorkspaceListPane({
       )}
       <Box height={1} />
       <Text
-        color={active && selectedIndex === addRowIndex ? "black" : "green"}
-        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
+        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
+        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
       >
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ New workspace
       </Text>
@@ -226,7 +233,8 @@ function WorkspaceListPane({
 }
 
 function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean }) {
-  const typeColor = item.type === "app" ? "magenta" : "yellow";
+  const theme = useTheme();
+  const typeColor = item.type === "app" ? theme.typeApp : theme.typeCommand;
   const closeLabel = item.closeAppName
     ? `quit "${item.closeAppName}"`
     : item.close
@@ -234,9 +242,12 @@ function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean })
       : "kill process";
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text color={selected ? "black" : "white"} backgroundColor={selected ? "cyan" : undefined}>
+      <Text
+        color={selected ? theme.selectionText : theme.text}
+        backgroundColor={selected ? theme.selectionBg : undefined}
+      >
         {selected ? "› " : "  "}
-        {item.name} <Text color={selected ? "black" : typeColor}>[{item.type}]</Text>
+        {item.name} <Text color={selected ? theme.selectionText : typeColor}>[{item.type}]</Text>
       </Text>
       <Text dimColor wrap="truncate-end">
         {"    "}launch: {item.launch}
@@ -266,10 +277,11 @@ function SideColumn({
   active: boolean;
   selectedIndex: number;
 }) {
+  const theme = useTheme();
   const addRowIndex = entries.length;
   return (
     <Box flexDirection="column" flexGrow={1} flexBasis={0} minWidth={0}>
-      <Text bold color={active ? "cyan" : "gray"}>
+      <Text bold color={active ? theme.accent : theme.border}>
         {title}
       </Text>
       <Text dimColor wrap="truncate-end">
@@ -284,8 +296,8 @@ function SideColumn({
         ))
       )}
       <Text
-        color={active && selectedIndex === addRowIndex ? "black" : "green"}
-        backgroundColor={active && selectedIndex === addRowIndex ? "cyan" : undefined}
+        color={active && selectedIndex === addRowIndex ? theme.selectionText : theme.success}
+        backgroundColor={active && selectedIndex === addRowIndex ? theme.selectionBg : undefined}
       >
         {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add item
       </Text>
@@ -315,6 +327,8 @@ function ItemPane({
   active: boolean;
   height: number;
 }) {
+  const theme = useTheme();
+
   if (!workspace) {
     return (
       <Box
@@ -322,7 +336,7 @@ function ItemPane({
         flexGrow={1}
         height={height}
         borderStyle="round"
-        borderColor="gray"
+        borderColor={theme.border}
         paddingX={2}
         justifyContent="center"
         alignItems="center"
@@ -340,10 +354,10 @@ function ItemPane({
       flexGrow={1}
       height={height}
       borderStyle="round"
-      borderColor={active ? "cyan" : "gray"}
+      borderColor={active ? theme.borderActive : theme.border}
       paddingX={2}
     >
-      <Text bold underline color={active ? "cyan" : "white"}>
+      <Text bold underline color={active ? theme.accent : theme.text}>
         {workspace.name}
       </Text>
       <Text dimColor>group: {workspace.group ?? UNGROUPED}</Text>
@@ -384,8 +398,10 @@ function ItemPane({
             ))
           )}
           <Text
-            color={active && selectedIndex === workspace.items.length ? "black" : "green"}
-            backgroundColor={active && selectedIndex === workspace.items.length ? "cyan" : undefined}
+            color={active && selectedIndex === workspace.items.length ? theme.selectionText : theme.success}
+            backgroundColor={
+              active && selectedIndex === workspace.items.length ? theme.selectionBg : undefined
+            }
           >
             {active && selectedIndex === workspace.items.length ? "› " : "  "}+ Add item
           </Text>
@@ -400,6 +416,7 @@ export function App() {
   const { columns, rows } = useTerminalSize();
 
   const [config, setConfig] = useState<Config>(() => loadConfig());
+  const [themesFile, setThemesFile] = useState<ThemesFile>(() => loadThemes());
   const [pane, setPane] = useState<Pane>("groups");
   const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
@@ -427,6 +444,11 @@ export function App() {
   useEffect(() => {
     saveConfig(config);
   }, [config]);
+
+  useEffect(() => {
+    saveThemes(themesFile);
+  }, [themesFile]);
+  const activeTheme = useMemo(() => getActiveTheme(themesFile), [themesFile]);
 
   const groups = useMemo(() => groupWorkspaces(config.workspaces), [config.workspaces]);
   const currentGroup = groups[groupIndex];
@@ -783,8 +805,11 @@ export function App() {
       overlayNode = (
         <SettingsForm
           existing={getSettings(config)}
-          onSubmit={(settings) => {
+          themeNames={themesFile.themes.map((t) => t.name)}
+          activeTheme={themesFile.activeTheme}
+          onSubmit={({ settings, theme }) => {
             setConfig((prev) => ({ ...prev, settings }));
+            setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
             setOverlay(null);
             flash("Saved settings");
           }}
@@ -813,45 +838,47 @@ export function App() {
   }
 
   return (
-    <Box flexDirection="column" width={columns} height={rows}>
-      <Header width={columns} />
-      <Box flexGrow={1} flexDirection="row">
-        {overlay ? (
-          <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
-            {overlayNode}
-          </Box>
-        ) : (
-          <>
-            {pane === "groups" ? (
-              <GroupPane
-                groups={groups}
-                selectedIndex={groupIndex}
-                active={pane === "groups"}
+    <ThemeProvider value={activeTheme.colors}>
+      <Box flexDirection="column" width={columns} height={rows}>
+        <Header width={columns} />
+        <Box flexGrow={1} flexDirection="row">
+          {overlay ? (
+            <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
+              {overlayNode}
+            </Box>
+          ) : (
+            <>
+              {pane === "groups" ? (
+                <GroupPane
+                  groups={groups}
+                  selectedIndex={groupIndex}
+                  active={pane === "groups"}
+                  height={contentHeight}
+                  openNames={openNames}
+                />
+              ) : (
+                <WorkspaceListPane
+                  groupName={currentGroup?.name}
+                  workspaces={currentGroupWorkspaces}
+                  selectedIndex={wsIndex}
+                  active={pane === "workspaces"}
+                  height={contentHeight}
+                  openNames={openNames}
+                />
+              )}
+              <Box width={1} />
+              <ItemPane
+                workspace={currentWorkspace}
+                selectedIndex={itemIndex}
+                itemColumn={itemColumn}
+                active={pane === "items"}
                 height={contentHeight}
-                openNames={openNames}
               />
-            ) : (
-              <WorkspaceListPane
-                groupName={currentGroup?.name}
-                workspaces={currentGroupWorkspaces}
-                selectedIndex={wsIndex}
-                active={pane === "workspaces"}
-                height={contentHeight}
-                openNames={openNames}
-              />
-            )}
-            <Box width={1} />
-            <ItemPane
-              workspace={currentWorkspace}
-              selectedIndex={itemIndex}
-              itemColumn={itemColumn}
-              active={pane === "items"}
-              height={contentHeight}
-            />
-          </>
-        )}
+            </>
+          )}
+        </Box>
+        <Footer hint={overlay ? "" : hint} message={message} width={columns} />
       </Box>
-      <Footer hint={overlay ? "" : hint} message={message} width={columns} />
-    </Box>
+    </ThemeProvider>
   );
 }
