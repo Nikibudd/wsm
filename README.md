@@ -47,7 +47,12 @@ wsm close [name]        # closes the current (or named) open workspace
 wsm close --all         # closes every currently open workspace
 wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
+wsm update              # downloads and installs the latest release, in place
 ```
+
+`wsm update` only works on a real release install (see "From a release"
+above) — it refuses to run on a development build (`wsmdev`), which updates
+via `npm run build` instead.
 
 ## Configuring a workspace
 
