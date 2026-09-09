@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { expandHome } from "./paths.js";
 import { loadState, saveState } from "./state.js";
-import { loadConfig, findWorkspace } from "./config.js";
-import type { Session, SessionItem, Workspace, WorkspaceItem } from "./types.js";
+import { loadConfig, findWorkspace, getSettings } from "./config.js";
+import type { Session, SessionItem, State, Workspace, WorkspaceItem } from "./types.js";
 
 function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
   if (item.cwd) return expandHome(item.cwd);
@@ -111,15 +111,16 @@ export async function closeWorkspaces(opts: { name?: string; all?: boolean }): P
   saveState({ sessions: remaining });
 }
 
-export async function openWorkspace(name: string, opts: { noClose?: boolean }): Promise<void> {
+export async function openWorkspace(name: string, opts: { close?: boolean }): Promise<void> {
   const config = loadConfig();
   const workspace = findWorkspace(config, name);
   if (!workspace) {
     throw new Error(`No workspace named "${name}" found. Run "wsm" to configure one.`);
   }
+  const shouldClose = opts.close ?? getSettings(config).defaultClose;
 
   const state = loadState();
-  if (!opts.noClose && state.sessions.length > 0) {
+  if (shouldClose && state.sessions.length > 0) {
     for (const session of state.sessions) closeSession(session);
     state.sessions = [];
   }
@@ -143,15 +144,113 @@ export async function openWorkspace(name: string, opts: { noClose?: boolean }): 
   console.log(`Workspace "${name}" is open (${items.length} item(s)).`);
 }
 
-export function statusReport(): string {
-  const state = loadState();
-  if (state.sessions.length === 0) return "No workspaces currently open.";
-  const lines: string[] = [];
+function isPidAlive(pid: number): boolean {
+  try {
+    // Signal 0 sends nothing but still throws (ESRCH) if the pid is gone.
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isAppRunning(appName: string): boolean {
+  try {
+    const result = spawnSync("osascript", ["-e", `tell application "${appName}" to running`], {
+      encoding: "utf8",
+    });
+    return result.stdout?.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+// Whether an item is actually still running — true/false when we have a
+// reliable signal, null when we don't and refuse to guess.
+//
+// The tracked `item.pid` is the *launcher shell's* pid (from `$SHELL -i -c
+// "<launch>"`), not necessarily the thing the launch command started. For a
+// command that hands off to a detached process — `code .`, `open -a X .`,
+// `docker run -d ...` — that shell exits within moments of launching,
+// almost always well before the real app/container does. So a dead
+// launcher pid does NOT mean the item quit; it's the expected, permanent
+// state for anything launched this way, and treating it as "not running"
+// produces near-constant false positives for exactly the items (GUI apps,
+// backgrounded containers) this check exists to help with.
+//
+// - closeAppName items: ask macOS by name — `tell application "X" to
+//   running` — using the exact same name already used to quit it via
+//   `tell application "X" to quit`, so this is consistent with how closing
+//   already works and isn't a new naming convention.
+// - close-command items (arbitrary custom command, e.g. `docker stop ...`):
+//   no generic way to verify. Rather than guess from the (expectedly dead)
+//   launcher pid, report unknown — never flagged as stale, never pruned.
+// - everything else: closing this item IS killing item.pid directly, so
+//   that pid's liveness is accurate and meaningful here.
+function itemRunning(item: SessionItem): boolean | null {
+  if (item.closeAppName) return isAppRunning(item.closeAppName);
+  if (item.close) return null;
+  return !item.pid || isPidAlive(item.pid);
+}
+
+export function pruneDeadSessions(state: State): {
+  state: State;
+  pruned: { workspace: string; item: string }[];
+} {
+  const pruned: { workspace: string; item: string }[] = [];
+  const sessions: Session[] = [];
   for (const session of state.sessions) {
+    const items = session.items.filter((item) => {
+      const dead = itemRunning(item) === false;
+      if (dead) pruned.push({ workspace: session.workspace, item: item.name });
+      return !dead;
+    });
+    if (items.length > 0) sessions.push({ ...session, items });
+  }
+  return { state: { sessions }, pruned };
+}
+
+interface SessionItemStatus {
+  name: string;
+  pid?: number;
+  running: boolean | null;
+}
+
+interface SessionStatus {
+  workspace: string;
+  openedAt: string;
+  items: SessionItemStatus[];
+}
+
+// Shared by statusReport (human text) and statusJson (machine-readable) so
+// the liveness check happens in exactly one place.
+function buildStatus(state: State): SessionStatus[] {
+  return state.sessions.map((session) => ({
+    workspace: session.workspace,
+    openedAt: session.openedAt,
+    items: session.items.map((item) => ({
+      name: item.name,
+      pid: item.pid,
+      running: itemRunning(item),
+    })),
+  }));
+}
+
+export function statusReport(state: State = loadState()): string {
+  const sessions = buildStatus(state);
+  if (sessions.length === 0) return "No workspaces currently open.";
+  const lines: string[] = [];
+  for (const session of sessions) {
     lines.push(`• ${session.workspace} (opened ${session.openedAt})`);
     for (const item of session.items) {
-      lines.push(`    - ${item.name}${item.pid ? ` [pid ${item.pid}]` : ""}`);
+      const pidInfo = item.pid ? ` [pid ${item.pid}]` : "";
+      const stale = item.running === false ? " (not running)" : "";
+      lines.push(`    - ${item.name}${pidInfo}${stale}`);
     }
   }
   return lines.join("\n");
+}
+
+export function statusJson(state: State = loadState()): string {
+  return JSON.stringify({ sessions: buildStatus(state) }, null, 2);
 }

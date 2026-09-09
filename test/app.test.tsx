@@ -2,14 +2,17 @@ import React from "react";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { jest } from "@jest/globals";
 import { render } from "ink-testing-library";
 import { load } from "js-yaml";
 import { App } from "../src/tui/App.js";
+import { SettingsForm } from "../src/tui/Form.js";
 
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const ENTER = "\r";
+const ESC = "\x1b";
 
 function flush(ms = 30) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -248,5 +251,125 @@ describe("App (TUI)", () => {
 
     const config = readConfigYaml(tmpDir);
     expect(config.workspaces.map((w: any) => w.name)).toEqual(["c"]);
+  });
+
+  test("pressing s from the groups pane opens Settings, and toggling+saving persists it", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    expect(lastFrame()).toContain("Settings");
+    expect(lastFrame()).toContain("Closes current workspace(s) first");
+
+    stdin.write(LEFT); // cycle the 2-option select the other way -> "Keeps them running"
+    await flush();
+    expect(lastFrame()).toContain("Keeps them running");
+
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(RIGHT); // "Flag only" -> "Auto-remove from state.json"
+    await flush();
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    stdin.write(ENTER); // last field, left as "Default" -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings).toEqual({ defaultClose: false, autoPruneStaleSessions: true });
+  });
+
+  test("cycling and saving the Theme field persists the selection to themes.json", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    expect(lastFrame()).toContain("Default");
+
+    stdin.write(RIGHT); // Default -> Catppuccin Mocha
+    await flush();
+    expect(lastFrame()).toContain("Catppuccin Mocha");
+
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const themes = JSON.parse(fs.readFileSync(path.join(tmpDir, "themes.json"), "utf8"));
+    expect(themes.activeTheme).toBe("Catppuccin Mocha");
+  });
+
+  test("canceling out of Settings after cycling the theme doesn't persist the unsaved preview", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    stdin.write(RIGHT); // Default -> Catppuccin Mocha, unsaved
+    await flush();
+    stdin.write(ESC); // cancel
+    await flush();
+
+    unmount();
+
+    // themes.json was written on mount (Default) but never updated, since
+    // cancel doesn't submit — the previewed-but-uncommitted "Catppuccin
+    // Mocha" selection must not leak into the persisted file.
+    const themes = JSON.parse(fs.readFileSync(path.join(tmpDir, "themes.json"), "utf8"));
+    expect(themes.activeTheme).toBe("Default");
+  });
+});
+
+describe("SettingsForm (Theme live preview)", () => {
+  // SettingsForm itself, in isolation: the App/theme rendering pipeline
+  // (which produces the actual on-screen color) is exercised separately by
+  // the App tests above; ink-testing-library renders with chalk's color
+  // support forced off under Jest, so there is no ANSI output here to
+  // assert on — what's actually testable, and what matters for "does it
+  // preview live", is that onPreviewTheme fires the instant the Theme
+  // field's value changes, before the form is submitted.
+  test("calls onPreviewTheme immediately when the Theme field is cycled, before any submit", async () => {
+    const onPreviewTheme = jest.fn();
+    const onSubmit = jest.fn();
+    const { stdin, unmount } = render(
+      <SettingsForm
+        existing={{ defaultClose: true, autoPruneStaleSessions: false }}
+        themeNames={["Default", "Catppuccin Mocha", "Dracula"]}
+        activeTheme="Default"
+        onPreviewTheme={onPreviewTheme}
+        onSubmit={onSubmit}
+        onCancel={() => {}}
+      />,
+    );
+    await flush();
+
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    expect(onPreviewTheme).not.toHaveBeenCalled();
+
+    stdin.write(RIGHT); // Default -> Catppuccin Mocha
+    await flush();
+    expect(onPreviewTheme).toHaveBeenCalledWith("Catppuccin Mocha");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    stdin.write(RIGHT); // Catppuccin Mocha -> Dracula
+    await flush();
+    expect(onPreviewTheme).toHaveBeenLastCalledWith("Dracula");
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    unmount();
   });
 });

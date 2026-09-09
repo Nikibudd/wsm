@@ -27,6 +27,10 @@ export function getStateFile(): string {
   return path.join(getConfigDir(), "state.json");
 }
 
+export function getThemesFile(): string {
+  return path.join(getConfigDir(), "themes.json");
+}
+
 export function ensureConfigDir(): void {
   fs.mkdirSync(getConfigDir(), { recursive: true });
 }

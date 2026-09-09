@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expandHome, getConfigDir, getConfigFile, getStateFile, ensureConfigDir } from "../src/paths.js";
+import {
+  expandHome,
+  getConfigDir,
+  getConfigFile,
+  getStateFile,
+  getThemesFile,
+  ensureConfigDir,
+} from "../src/paths.js";
 
 describe("paths", () => {
   const previousEnv = process.env.WSM_CONFIG_DIR;
@@ -25,6 +32,7 @@ describe("paths", () => {
     expect(getConfigDir()).toBe(expected);
     expect(getConfigFile()).toBe(path.join(expected, "config.yaml"));
     expect(getStateFile()).toBe(path.join(expected, "state.json"));
+    expect(getThemesFile()).toBe(path.join(expected, "themes.json"));
   });
 
   test("without WSM_CONFIG_DIR, defaults to ~/.config/workspace-manager", () => {

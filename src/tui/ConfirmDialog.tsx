@@ -1,5 +1,6 @@
 import React from "react";
 import { Box, Text, useInput, useStdout } from "ink";
+import { useTheme } from "./ThemeContext.js";
 
 export function ConfirmDialog({
   title = "Confirm",
@@ -13,6 +14,7 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const { stdout } = useStdout();
+  const theme = useTheme();
   const width = Math.max(30, Math.min(54, (stdout?.columns || 80) - 4));
 
   useInput((input, key) => {
@@ -29,12 +31,12 @@ export function ConfirmDialog({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="red"
+      borderColor={theme.danger}
       paddingX={2}
       paddingY={1}
       width={width}
     >
-      <Text bold color="red">
+      <Text bold color={theme.danger}>
         {title}
       </Text>
       <Box height={1} />

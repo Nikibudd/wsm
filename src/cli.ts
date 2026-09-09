@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { openWorkspace, closeWorkspaces, statusReport } from "./launcher.js";
-import { loadConfig } from "./config.js";
+import { openWorkspace, closeWorkspaces, statusReport, statusJson, pruneDeadSessions } from "./launcher.js";
+import { loadConfig, workspaceNames, getSettings } from "./config.js";
+import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
+import { bashCompletionScript, zshCompletionScript } from "./completion.js";
 
 const program = new Command();
 
@@ -13,11 +15,17 @@ program
 
 program
   .command("open <name>")
-  .description("Open a configured workspace, closing any currently open workspace first")
-  .option("--no-close", "keep the currently open workspace(s) running instead of closing them")
-  .action(async (name: string, options: { close: boolean }) => {
+  .description(
+    "Open a configured workspace (closes any currently open workspace first, unless configured otherwise)",
+  )
+  .option("--close", "close the currently open workspace(s) first, overriding the configured default")
+  .option(
+    "--no-close",
+    "keep the currently open workspace(s) running instead of closing them, overriding the configured default",
+  )
+  .action(async (name: string, options: { close?: boolean }) => {
     try {
-      await openWorkspace(name, { noClose: !options.close });
+      await openWorkspace(name, { close: options.close });
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;
@@ -36,8 +44,13 @@ program
   .command("list")
   .alias("ls")
   .description("List configured workspaces")
-  .action(() => {
+  .option("--names-only", "print just the workspace names, one per line (for shell completion)")
+  .action((options: { namesOnly?: boolean }) => {
     const config = loadConfig();
+    if (options.namesOnly) {
+      for (const name of workspaceNames(config)) console.log(name);
+      return;
+    }
     if (config.workspaces.length === 0) {
       console.log('No workspaces configured yet. Run "wsm" to create one.');
       return;
@@ -50,8 +63,41 @@ program
 program
   .command("status")
   .description("Show currently open workspace(s)")
-  .action(() => {
-    console.log(statusReport());
+  .option("--json", "print machine-readable JSON instead of the human-readable summary")
+  .action((options: { json?: boolean }) => {
+    const settings = getSettings(loadConfig());
+    let state = loadState();
+    if (settings.autoPruneStaleSessions) {
+      const result = pruneDeadSessions(state);
+      state = result.state;
+      if (result.pruned.length > 0) {
+        saveState(state);
+        // stderr, not stdout: keeps --json's stdout output pure JSON for piping.
+        for (const p of result.pruned) console.error(`Pruned stale session item: ${p.workspace} › ${p.item}`);
+      }
+    }
+    console.log(options.json ? statusJson(state) : statusReport(state));
+  });
+
+program
+  .command("completion <shell>")
+  .description("Print a shell completion script for bash or zsh (eval it in your rc file)")
+  .action((shell: string) => {
+    const commandNames = program.commands.map((c) => c.name());
+    // Derived from each command's own declared arguments (rather than
+    // hardcoded in the completion templates) so a future command taking a
+    // workspace name picks up name-completion automatically.
+    const nameArgCommands = program.commands
+      .filter((c) => c.registeredArguments.some((a) => a.name() === "name"))
+      .map((c) => c.name());
+    if (shell === "bash") {
+      console.log(bashCompletionScript(commandNames, nameArgCommands));
+    } else if (shell === "zsh") {
+      console.log(zshCompletionScript(commandNames, nameArgCommands));
+    } else {
+      console.error(`Unsupported shell "${shell}". Expected "bash" or "zsh".`);
+      process.exitCode = 1;
+    }
   });
 
 async function main() {

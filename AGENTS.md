@@ -23,6 +23,15 @@ Branch new work from `develop`, not `main`; `main` only advances via a merge
 from `develop` (a "release"). A remote (`origin`, GitHub) exists and every
 branch is expected to be pushed there.
 
+**Do not merge a feature branch into `develop` yourself, and do not push.**
+Create the feature branch and commit to it — that's the whole scope. The
+user pushes it and merges into `develop` manually via a PR (this is also
+what `.github/workflows/ci.yml`'s PR-triggered build+test is for — it needs
+an actual PR to run against). This is a deliberate change from earlier in
+this project's history, where merging feature branches into `develop`
+directly (no PR) was the norm — don't follow that older pattern now that
+it's been explicitly overridden.
+
 The history was reconstructed after the fact — the code across several early
 features was actually written in one continuous session with nothing
 committed, then split into per-feature branches/commits afterward to look
@@ -62,14 +71,18 @@ going forward.
 src/
   paths.ts       config/state file locations, ~ expansion
   types.ts       Config/Workspace/WorkspaceItem/Session/State shapes
+  jsonFile.ts    shared safe-load/save-JSON-file contract, used by state.ts and theme.ts
   config.ts      load/save ~/.config/workspace-manager/config.yaml
   state.ts       load/save ~/.config/workspace-manager/state.json (open sessions)
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
-  cli.ts         commander entry point (open/close/list/status; no-args -> TUI)
+  cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
+  completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
+  theme.ts       load/save ~/.config/workspace-manager/themes.json, built-in themes
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
-    Form.tsx     generic keyboard-driven form + ItemForm/WorkspaceForm/RenameGroupForm
+    Form.tsx     generic keyboard-driven form + ItemForm/WorkspaceForm/RenameGroupForm/SettingsForm
     ConfirmDialog.tsx
+    ThemeContext.tsx  React context/useTheme() consumed by every color-bearing component
     index.tsx    alt-screen enter/exit, renders <App/>
 test/            jest, mirrors src/ one file per module + app.test.tsx for the TUI
 ```
@@ -79,6 +92,76 @@ sharing a project folder. A workspace can instead be **split** into separate
 frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
 in which case each item picks a `side`. Single-folder is always the default;
 `layout` is omitted from saved config entirely unless split is chosen.
+
+Tool-wide behavior (as opposed to per-workspace config) lives in an optional
+top-level `settings:` key in the same `config.yaml` — not a separate file.
+`config.getSettings(config)` merges it with defaults (`defaultClose: true`,
+`autoPruneStaleSessions: false`) and is the only place that needs to know
+those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
+than reading `config.settings` directly, so a missing/partial `settings:`
+key never needs an `undefined` check at the call site. Edited via the TUI's
+Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
+`Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
+cycled with ←→) for each boolean rather than introducing a new field kind.
+
+TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
+(`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
+`config.yaml`/`settings` because it's display state, not workspace config.
+`src/theme.ts` owns the pure load/save/`getActiveTheme` logic and ships
+several built-in themes (Default — the plain ANSI palette this TUI had
+before theming existed — plus Catppuccin Mocha, Dracula, Nord, Gruvbox Dark,
+Tokyo Night, Solarized Dark); `src/tui/ThemeContext.tsx` is a React context
+(`ThemeProvider`/`useTheme()`) that every color-bearing component in
+`App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is no
+prop-drilling. Switching is TUI-only, from the same Settings overlay (theme
+is a field in `SettingsForm`, wired through an `onPreviewTheme` callback so
+changing the value applies it live via `App`'s `previewThemeName` state,
+before the field is submitted — canceling clears the preview and reverts to
+the persisted theme without writing `themes.json`). **Creating** a new theme
+is file-only — hand-edit `themes.json` (add an entry to `themes`, point
+`activeTheme` at it) — there's no in-TUI theme editor.
+
+`loadThemes()` merges any `DEFAULT_THEMES` entry missing from an existing
+file (matched by name) into what it returns — don't drop this. Without it,
+an already-auto-created `themes.json` (the TUI writes one on first run,
+before the user ever touches it) permanently shadows every `DEFAULT_THEMES`
+array shipped after that point: real bug hit while building this — a user
+had a 3-theme file from before Nord/Gruvbox Dark/Tokyo Night/Solarized Dark
+existed, rebuilt `dist/`, and still saw only 3, because `loadThemes()` only
+fell back to `DEFAULT_THEMES` for a *missing* file, never merged into an
+*existing* one. Only names absent from the file are added; anything already
+present — built-in or a user's own custom colors saved under a built-in's
+name — is left untouched.
+
+**Ink never emits color in `ink-testing-library`'s `lastFrame()` unless
+`FORCE_COLOR` is set — and this produces false-positive passes, not
+failures, so it's easy to ship an unverified color bug believing it's
+verified.** `ink-testing-library`'s fake `Stdout` has no `isTTY`, so chalk
+(which Ink's `colorize()` delegates to — see `node_modules/ink/build/
+colorize.js`) auto-detects zero color support and every `chalk.hex(...)`/
+named-color call — including ones written in a *verification* script, not
+just in application code — silently returns the plain unstyled string with
+no ANSI escapes at all. A check like `frame.includes(chalk.hex(color)(text)
+.split(text)[0])` then degrades to `frame.includes("")`, which is always
+true, "confirming" correct rendering whether or not it actually is (this
+happened while building this feature — an initial verification pass
+reported all themes rendering correctly, colors included, purely because of
+this). This is true both under Jest and under plain `node` in this
+environment specifically because the sandbox's `process.stdout` is piped,
+not a real TTY, so the same failure mode hits any one-off script run here
+too, not just the test suite. Two consequences: (1) don't write permanent
+Jest assertions that depend on ANSI output — assert the callback/data-level
+contract instead (e.g. `SettingsForm`'s `onPreviewTheme` is unit-tested
+directly with a `jest.fn()`, not by trying to observe a color change in
+`lastFrame()`); (2) any one-off script actually verifying rendered color
+(not kept in the repo; recreate similarly if theme rendering regresses)
+*must* run with `FORCE_COLOR=3 node script.mjs` and should assert the
+computed expected prefix has non-zero length before trusting an `includes()`
+check against it — otherwise the check can't fail even when it should.
+
+Muted/secondary text (`dimColor`) intentionally stays untethered to the
+theme — `dimColor` dims whatever the terminal's current foreground already
+is, so it looks correct under any theme without needing its own color role.
 
 ## Lessons learned (don't regress these)
 
@@ -148,6 +231,37 @@ in which case each item picks a `side`. Single-folder is always the default;
   `package.json`'s `bin` field or package name changes, which is rare —
   don't confuse the two steps.
 
+- **A tracked `SessionItem.pid` is the *launcher shell's* pid, not
+  necessarily the thing the launch command started — for anything that
+  hands off to a detached process (`code .`, `open -a X .`, `docker run -d
+  ...`) that shell exits within moments, almost always long before the real
+  app/container does.** A dead tracked pid is the *expected, permanent*
+  state for these, not a sign anything quit. Real incident: `wsm status`'s
+  original pid-liveness check (`isPidAlive` alone) flagged an actually-
+  running VS Code as "(not running)" every time, because the `code .`
+  wrapper it spawned had already exited — confirmed by watching the tracked
+  pid die within ~1s of launch (`ps -p <pid>`) while `ps aux | grep "Visual
+  Studio Code"` showed the real Electron process still very much alive.
+  Worse: with `autoPruneStaleSessions` on, this would have **silently
+  deleted session records for still-running items** on every `wsm status`.
+  Fixed via `launcher.ts`'s `itemRunning(item): boolean | null`, which
+  picks the check by how the item is configured to close (mirrors the
+  existing close-priority order in spirit, not by coincidence):
+  - `closeAppName` set → `tell application "X" to running` (same app name
+    already used to quit it via `tell application "X" to quit` — consistent
+    with existing close logic, not a new naming convention to keep in sync).
+  - `close` set (arbitrary custom command, e.g. `docker stop ...`) → no
+    generic way to verify, so **unknown** (`null`) rather than guessed —
+    never flagged as stale, never auto-pruned. Guessing wrong here is worse
+    than not knowing: false "not running" erodes trust in the whole
+    feature, silent auto-prune loses track of something still open.
+  - neither set → the fallback close mechanism kills `item.pid` directly,
+    so that pid's own liveness is accurate and meaningful — no change here.
+  If you add a new close mechanism, give `itemRunning` a matching branch
+  rather than falling through to the raw pid check, which produces this
+  exact false-positive class for anything that isn't a foreground process
+  attached to the launcher shell.
+
 - **Sessions stack by name, they don't dedupe.** `wsm open <name> --no-close`
   pushes a new session onto `state.json` without checking whether a session
   for that same workspace name already exists — you can end up with two (or
@@ -157,6 +271,70 @@ in which case each item picks a `side`. Single-folder is always the default;
   session (the last one opened). This is intentional, not a bug — but it
   reads as surprising ("why did closing print two 'Closing workspace...'
   blocks?") if you don't know it going in.
+
+- **`cli.ts` itself has no test file — it's just commander wiring.** Keep it
+  that way: any actual logic a command needs (string building, script
+  generation, name extraction) belongs in its own `src/` module with a
+  matching `test/*.test.ts`, and `cli.ts`'s `.action()` should just call it.
+  `src/completion.ts` (bash/zsh completion script generation, tested via
+  string assertions on the generated script) and `config.workspaceNames()`
+  follow this — that's what let shell completion get TDD'd without spawning
+  a real child process per test. The generated scripts shell out to
+  `wsm list --names-only` at *completion* time (not script-generation time),
+  so completions stay in sync with `config.yaml` without regenerating or
+  reinstalling the script. The commands that take a workspace-name argument
+  (currently `open`/`close`) aren't hardcoded in the templates either — the
+  `completion` action derives them from each command's own
+  `registeredArguments` (commander's own argument metadata), so a future
+  command taking a workspace name picks up completion automatically instead
+  of needing both shell templates hand-edited.
+
+- **`state.ts`/`theme.ts` share one JSON-file contract via `jsonFile.ts`
+  (`readJsonFile`/`writeJsonFile`) — don't hand-roll a third copy.** Both
+  need "missing/empty/malformed file all fall back to a default, never
+  throw," and originally implemented it twice, nearly line-for-line. If a
+  future module needs the same JSON-file contract, use `jsonFile.ts`, not a
+  new copy. `config.ts` is intentionally separate — it's YAML, a different
+  parser/format, not a duplicate of this pattern.
+
+- **`openWorkspace(name, opts)` resolves `settings.defaultClose` itself now,
+  from the same `loadConfig()` call it already makes — `opts` is `{
+  close?: boolean }` (undefined = "use the configured default"), not the
+  older `{ noClose?: boolean }`.** Before, only `cli.ts` applied the
+  configured default (by pre-computing it and passing an inverted
+  `noClose`), so any other caller of `openWorkspace` would silently ignore
+  the user's `defaultClose` setting and always close by default. Keep the
+  resolution inside `openWorkspace` — don't push it back out to callers.
+
+- **`statusReport(state?)` takes an optional pre-loaded `State`** so
+  `wsm status` doesn't read+parse `state.json` twice when
+  `autoPruneStaleSessions` is on (once for `pruneDeadSessions`, again inside
+  `statusReport`). Omitting it still calls `loadState()` internally, so
+  existing no-arg callers/tests are unaffected — pass the state through
+  when you already have it loaded. `statusJson(state?)` is its
+  machine-readable sibling (`wsm status --json`), sharing the same
+  `buildStatus()` pid-liveness check internally so "is this pid alive"
+  isn't computed twice by two separate formatters. `wsm status --json`'s
+  auto-prune notification goes to **stderr** (`console.error`), not stdout
+  — the CLI's one place where that distinction matters, since stdout must
+  stay pure JSON for piping (`wsm status --json | jq ...`).
+
+- **`App.tsx`'s `rowStyle(selected, theme, fallbackColor?)` helper is the
+  one place the "selected row" color pair (`selectionText`/`selectionBg` vs.
+  a fallback) is computed.** It used to be copy-pasted at every selectable
+  row and every "+ Add …" row (7 call sites) with the theming diff
+  mechanically threading `theme.selectionText`/`selectionBg` through each
+  one. Add new selectable rows through this helper (spread `{...rowStyle(...)}` 
+  onto the `<Text>`), don't inline the ternary pair again.
+
+- **`theme.ts`'s `ThemeColors` type is derived from the runtime
+  `THEME_COLOR_ROLES` array (`Record<(typeof THEME_COLOR_ROLES)[number],
+  string>`), not a hand-written interface.** `ThemeColors` used to be a
+  plain interface with no runtime equivalent, so anything needing to
+  enumerate the roles (e.g. a test asserting every built-in theme defines
+  all of them) had to hardcode the list separately and could silently drift
+  from the type. Add new color roles to `THEME_COLOR_ROLES`, not to a
+  separate interface.
 
 ## Testing
 
@@ -201,7 +379,60 @@ a gap worth closing, not as the normal workflow.
 ```bash
 npm run build   # tsc -> dist/, chmod +x dist/cli.js — run this after every
                 # src/ change before testing the real `wsm` command
+npm run bundle  # dist/ -> release/wsm.mjs, a single self-contained file
+                # (esbuild). Run `npm run build` first — see Releases below
 npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs)
 npm link        # expose `wsm` globally — only needs re-running if package.json's
                 # bin field or package name changes, not after ordinary edits
 ```
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR targeting `develop` or `main`:
+`npm ci` → `npm run build` → `npm test`. The build step is there for a
+reason beyond "does it compile" — `babel-jest` (see Testing above) strips
+TypeScript types without checking them, so `npm test` passing on its own
+does **not** mean `tsc` would succeed. A type error can pass the whole test
+suite and only get caught by the separate `npm run build` step, in CI or
+locally.
+
+## Releases
+
+`.github/workflows/release.yml` fires when a PR into `main` is merged (not
+on every push to `main` — gated on `github.event.pull_request.merged ==
+true`, since a closed-but-unmerged PR shouldn't cut a release) and publishes
+a GitHub Release with one attached asset: `release/wsm.mjs`, a single
+self-contained file — `dist/cli.js` and every dependency bundled together
+via esbuild (`npm run bundle`, see `scripts/bundle.mjs`). Users need Node.js
+installed but nothing else; no `node_modules`, no `npm install`. Verified by
+hand (real pty, not just `--version`) that the bundle's TUI actually renders
+correctly — Ink + `yoga-layout`'s WASM loader is exactly the kind of thing
+that's plausible to silently break under bundling, so this was worth
+confirming rather than assuming.
+
+Two non-obvious things baked into `scripts/bundle.mjs`, don't strip them
+without knowing why they're there:
+- **`react-devtools-core` is aliased to `scripts/react-devtools-core-stub.js`.**
+  It's an optional dependency ink only imports when `process.env.DEV ===
+  "true"` *and* a runtime `import.meta.resolve()` check confirms it's
+  actually installed (see `node_modules/ink/build/reconciler.js`) — neither
+  is true in normal `wsm` usage, so the real import is never reached. But
+  esbuild resolves the whole module graph statically at bundle time
+  regardless of that runtime gate, so bundling fails without *something* to
+  resolve it to. The stub is never actually invoked.
+  Same underlying theme as the `transformIgnorePatterns`/`yoga-layout` note
+  under Testing above: tools that process Ink's module graph by rules other
+  than Node's own module resolution are the recurring source of breakage
+  here — Babel force-transforming `yoga-layout`'s WASM loader there,
+  esbuild's static resolution ignoring a runtime gate here.
+- **The `createRequire` banner shim.** Some bundled CJS dependency expects a
+  real `require` in scope that esbuild's own CJS-interop wrapper doesn't
+  cover in every case.
+
+**Releases are tagged by `package.json`'s `"version"` field (`v<version>`),
+not by commit SHA or a running build number — bump it as part of any PR
+into `main` that should produce a new release.** If you merge a PR without
+bumping the version, the release step fails on purpose (`gh release create`
+errors on a tag that already exists) rather than silently overwriting or
+skipping — that failure is the intended signal to go bump the version, not
+a bug to route around.

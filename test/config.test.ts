@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, saveConfig, findWorkspace } from "../src/config.js";
+import { loadConfig, saveConfig, findWorkspace, workspaceNames, getSettings } from "../src/config.js";
 import type { Config } from "../src/types.js";
 
 describe("config", () => {
@@ -81,5 +81,42 @@ describe("config", () => {
     };
     expect(findWorkspace(config, "b")?.name).toBe("b");
     expect(findWorkspace(config, "missing")).toBeUndefined();
+  });
+
+  test("workspaceNames returns the configured workspace names in order", () => {
+    const config: Config = {
+      workspaces: [
+        { name: "b", items: [] },
+        { name: "a", items: [] },
+      ],
+    };
+    expect(workspaceNames(config)).toEqual(["b", "a"]);
+  });
+
+  test("workspaceNames returns an empty array for an empty config", () => {
+    expect(workspaceNames({ workspaces: [] })).toEqual([]);
+  });
+
+  test("getSettings defaults to closing existing sessions and not auto-pruning, when unset", () => {
+    expect(getSettings({ workspaces: [] })).toEqual({
+      defaultClose: true,
+      autoPruneStaleSessions: false,
+    });
+  });
+
+  test("getSettings fills in defaults for keys the user hasn't overridden", () => {
+    expect(getSettings({ workspaces: [], settings: { autoPruneStaleSessions: true } })).toEqual({
+      defaultClose: true,
+      autoPruneStaleSessions: true,
+    });
+  });
+
+  test("saveConfig then loadConfig round-trips settings", () => {
+    const original: Config = {
+      workspaces: [],
+      settings: { defaultClose: false, autoPruneStaleSessions: true },
+    };
+    saveConfig(original);
+    expect(loadConfig()).toEqual(original);
   });
 });
