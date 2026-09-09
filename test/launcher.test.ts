@@ -300,6 +300,137 @@ describe("launcher", () => {
     expect(parsed).toEqual({ sessions: [] });
   });
 
+  // A `type: "app"` item's tracked pid is the *launcher shell's* pid, not
+  // the app's — and for `code .`/`open -a X` that shell exits almost
+  // immediately once it's handed off to the real (detached) app process.
+  // So the tracked pid dying is expected and does NOT mean the app quit;
+  // liveness for closeAppName items must come from asking macOS about the
+  // app by name instead (the same name already used to quit it), not from
+  // the dead launcher pid.
+  describe("liveness for closeAppName items uses `tell application to running`, not the dead launcher pid", () => {
+    beforeEach(() => {
+      seedConfig({
+        workspaces: [
+          {
+            name: "demo",
+            items: [
+              { name: "Vscode", type: "app", launch: "code .", closeAppName: "Visual Studio Code" },
+            ],
+          },
+        ],
+      });
+      // The launcher's own tracked pid is always dead in these tests —
+      // that's the whole point: it must not be what liveness relies on.
+      killSpy.mockImplementation((() => {
+        throw new Error("ESRCH");
+      }) as unknown as typeof process.kill);
+    });
+
+    test("statusReport does not flag it as not running when the app is actually running", async () => {
+      await launcher.openWorkspace("demo", {});
+      spawnSyncMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === "osascript" && args.join(" ").includes('"Visual Studio Code" to running')) {
+          return { status: 0, stdout: "true\n" };
+        }
+        return { status: 0 };
+      }) as typeof spawnSyncMock);
+
+      expect(launcher.statusReport()).not.toContain("(not running)");
+    });
+
+    test("statusReport flags it as not running when the app really has quit", async () => {
+      await launcher.openWorkspace("demo", {});
+      spawnSyncMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === "osascript" && args.join(" ").includes('"Visual Studio Code" to running')) {
+          return { status: 0, stdout: "false\n" };
+        }
+        return { status: 0 };
+      }) as typeof spawnSyncMock);
+
+      expect(launcher.statusReport()).toContain("(not running)");
+    });
+
+    test("statusJson reports running: true for a live app despite the dead launcher pid", async () => {
+      await launcher.openWorkspace("demo", {});
+      spawnSyncMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === "osascript" && args.join(" ").includes('"Visual Studio Code" to running')) {
+          return { status: 0, stdout: "true\n" };
+        }
+        return { status: 0 };
+      }) as typeof spawnSyncMock);
+
+      const parsed = JSON.parse(launcher.statusJson());
+      expect(parsed.sessions[0].items[0].running).toBe(true);
+    });
+
+    test("pruneDeadSessions does not remove a session item for an app that's still running", async () => {
+      await launcher.openWorkspace("demo", {});
+      spawnSyncMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === "osascript" && args.join(" ").includes('"Visual Studio Code" to running')) {
+          return { status: 0, stdout: "true\n" };
+        }
+        return { status: 0 };
+      }) as typeof spawnSyncMock);
+
+      const { pruned } = launcher.pruneDeadSessions(stateModule.loadState());
+      expect(pruned).toEqual([]);
+    });
+
+    test("pruneDeadSessions removes a session item once the app has genuinely quit", async () => {
+      await launcher.openWorkspace("demo", {});
+      spawnSyncMock.mockImplementation(((cmd: string, args: string[]) => {
+        if (cmd === "osascript" && args.join(" ").includes('"Visual Studio Code" to running')) {
+          return { status: 0, stdout: "false\n" };
+        }
+        return { status: 0 };
+      }) as typeof spawnSyncMock);
+
+      const { pruned } = launcher.pruneDeadSessions(stateModule.loadState());
+      expect(pruned).toEqual([{ workspace: "demo", item: "Vscode" }]);
+    });
+  });
+
+  // An item with a custom `close` command (e.g. `docker stop ...`) has no
+  // generic way to verify liveness — the launcher pid dies as soon as
+  // `docker run -d` returns, same class of problem as closeAppName items,
+  // but there's no equivalent to "ask macOS by name" for an arbitrary
+  // close command. Must not guess: treat as unknown rather than falsely
+  // reporting "not running" (and never auto-prune on an unverifiable item).
+  describe("liveness for items with a custom `close` command is left unverified, not guessed from the dead launcher pid", () => {
+    beforeEach(() => {
+      seedConfig({
+        workspaces: [
+          {
+            name: "demo",
+            items: [
+              { name: "Mongo", type: "command", launch: "docker run -d --rm mongo", close: "docker stop mongo" },
+            ],
+          },
+        ],
+      });
+      killSpy.mockImplementation((() => {
+        throw new Error("ESRCH");
+      }) as unknown as typeof process.kill);
+    });
+
+    test("statusReport does not flag it as not running", async () => {
+      await launcher.openWorkspace("demo", {});
+      expect(launcher.statusReport()).not.toContain("(not running)");
+    });
+
+    test("statusJson reports running: null (unverifiable), not false", async () => {
+      await launcher.openWorkspace("demo", {});
+      const parsed = JSON.parse(launcher.statusJson());
+      expect(parsed.sessions[0].items[0].running).toBeNull();
+    });
+
+    test("pruneDeadSessions leaves it alone", async () => {
+      await launcher.openWorkspace("demo", {});
+      const { pruned } = launcher.pruneDeadSessions(stateModule.loadState());
+      expect(pruned).toEqual([]);
+    });
+  });
+
   test("pruneDeadSessions drops only the dead items, and drops a session entirely once all its items are dead", async () => {
     seedConfig({
       workspaces: [
