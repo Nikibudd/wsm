@@ -32,6 +32,17 @@ this project's history, where merging feature branches into `develop`
 directly (no PR) was the norm — don't follow that older pattern now that
 it's been explicitly overridden.
 
+**Don't switch back to `develop` after finishing a task — leave the working
+directory on the feature branch you just created/committed to.** Since the
+user is the one who pushes (see above), switching back to `develop` just
+means they have to `git checkout` the feature branch themselves before they
+can push it — pure friction, no benefit. Staying on the feature branch is
+also correct when picking a task back up or stacking related work: check
+whether an unmerged feature branch already covers the topic (or is a
+sensible base for it, like `feature/readme-restructure-install-vs-
+contributing` was built on `feature/dev-vs-release-command-and-config`)
+before branching fresh from `develop` again.
+
 The history was reconstructed after the fact — the code across several early
 features was actually written in one continuous session with nothing
 committed, then split into per-feature branches/commits afterward to look
