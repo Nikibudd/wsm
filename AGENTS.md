@@ -97,21 +97,45 @@ cycled with ←→) for each boolean rather than introducing a new field kind.
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
 `config.yaml`/`settings` because it's display state, not workspace config.
-`src/theme.ts` owns the pure load/save/`getActiveTheme` logic and ships three
-built-in themes (Default — the plain ANSI palette this TUI had before
-theming existed — Catppuccin Mocha, Dracula); `src/tui/ThemeContext.tsx` is a
-React context (`ThemeProvider`/`useTheme()`) that every color-bearing
-component in `App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is
-no prop-drilling. Switching is TUI-only, from the same Settings overlay
-(theme is just a third field in `SettingsForm`); **creating** a new theme is
-file-only — hand-edit `themes.json` (add an entry to `themes`, point
-`activeTheme` at it) — there's no in-TUI theme editor. Verifying a theme
-change actually renders can't be done by asserting on `lastFrame()` text
-(colors are ANSI escapes around the text, not part of it); the real check is
-computing the expected `chalk.hex(...)`/named-color escape sequence and
-confirming it's a substring of the raw frame — see the ad hoc script used to
-verify this feature (not kept in the repo; recreate similarly if theme
-rendering regresses).
+`src/theme.ts` owns the pure load/save/`getActiveTheme` logic and ships
+several built-in themes (Default — the plain ANSI palette this TUI had
+before theming existed — plus Catppuccin Mocha, Dracula, Nord, Gruvbox Dark,
+Tokyo Night, Solarized Dark); `src/tui/ThemeContext.tsx` is a React context
+(`ThemeProvider`/`useTheme()`) that every color-bearing component in
+`App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is no
+prop-drilling. Switching is TUI-only, from the same Settings overlay (theme
+is a field in `SettingsForm`, wired through an `onPreviewTheme` callback so
+changing the value applies it live via `App`'s `previewThemeName` state,
+before the field is submitted — canceling clears the preview and reverts to
+the persisted theme without writing `themes.json`). **Creating** a new theme
+is file-only — hand-edit `themes.json` (add an entry to `themes`, point
+`activeTheme` at it) — there's no in-TUI theme editor.
+
+**Ink never emits color in `ink-testing-library`'s `lastFrame()` unless
+`FORCE_COLOR` is set — and this produces false-positive passes, not
+failures, so it's easy to ship an unverified color bug believing it's
+verified.** `ink-testing-library`'s fake `Stdout` has no `isTTY`, so chalk
+(which Ink's `colorize()` delegates to — see `node_modules/ink/build/
+colorize.js`) auto-detects zero color support and every `chalk.hex(...)`/
+named-color call — including ones written in a *verification* script, not
+just in application code — silently returns the plain unstyled string with
+no ANSI escapes at all. A check like `frame.includes(chalk.hex(color)(text)
+.split(text)[0])` then degrades to `frame.includes("")`, which is always
+true, "confirming" correct rendering whether or not it actually is (this
+happened while building this feature — an initial verification pass
+reported all themes rendering correctly, colors included, purely because of
+this). This is true both under Jest and under plain `node` in this
+environment specifically because the sandbox's `process.stdout` is piped,
+not a real TTY, so the same failure mode hits any one-off script run here
+too, not just the test suite. Two consequences: (1) don't write permanent
+Jest assertions that depend on ANSI output — assert the callback/data-level
+contract instead (e.g. `SettingsForm`'s `onPreviewTheme` is unit-tested
+directly with a `jest.fn()`, not by trying to observe a color change in
+`lastFrame()`); (2) any one-off script actually verifying rendered color
+(not kept in the repo; recreate similarly if theme rendering regresses)
+*must* run with `FORCE_COLOR=3 node script.mjs` and should assert the
+computed expected prefix has non-zero length before trusting an `includes()`
+check against it — otherwise the check can't fail even when it should.
 
 Muted/secondary text (`dimColor`) intentionally stays untethered to the
 theme — `dimColor` dims whatever the terminal's current foreground already

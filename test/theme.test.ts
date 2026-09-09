@@ -19,9 +19,39 @@ describe("theme", () => {
     else process.env.WSM_CONFIG_DIR = previousEnv;
   });
 
-  test("ships at least Default, Catppuccin Mocha, and Dracula as built-in themes", () => {
+  test("ships several popular built-in themes", () => {
     const names = DEFAULT_THEMES.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["Default", "Catppuccin Mocha", "Dracula"]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "Default",
+        "Catppuccin Mocha",
+        "Dracula",
+        "Nord",
+        "Gruvbox Dark",
+        "Tokyo Night",
+        "Solarized Dark",
+      ]),
+    );
+  });
+
+  test("every built-in theme defines all ThemeColors roles with non-empty values", () => {
+    const roles = [
+      "accent",
+      "border",
+      "borderActive",
+      "text",
+      "success",
+      "danger",
+      "typeApp",
+      "typeCommand",
+      "selectionBg",
+      "selectionText",
+    ] as const;
+    for (const theme of DEFAULT_THEMES) {
+      for (const role of roles) {
+        expect(theme.colors[role]).toBeTruthy();
+      }
+    }
   });
 
   test("loadThemes returns the built-in defaults, with the first theme active, when no file exists", () => {

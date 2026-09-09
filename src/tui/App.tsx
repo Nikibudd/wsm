@@ -424,6 +424,10 @@ export function App() {
   const [itemColumn, setItemColumn] = useState<ItemSide>("frontend");
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Unsaved theme selection from the Settings overlay's Theme field, applied
+  // immediately so changing it previews live; cleared on save (themesFile
+  // itself now reflects it) or cancel (revert to the persisted theme).
+  const [previewThemeName, setPreviewThemeName] = useState<string | null>(null);
 
   const openNames = useMemo(() => new Set(loadState().sessions.map((s) => s.workspace)), []);
 
@@ -448,7 +452,10 @@ export function App() {
   useEffect(() => {
     saveThemes(themesFile);
   }, [themesFile]);
-  const activeTheme = useMemo(() => getActiveTheme(themesFile), [themesFile]);
+  const activeTheme = useMemo(
+    () => getActiveTheme({ ...themesFile, activeTheme: previewThemeName ?? themesFile.activeTheme }),
+    [themesFile, previewThemeName],
+  );
 
   const groups = useMemo(() => groupWorkspaces(config.workspaces), [config.workspaces]);
   const currentGroup = groups[groupIndex];
@@ -807,13 +814,18 @@ export function App() {
           existing={getSettings(config)}
           themeNames={themesFile.themes.map((t) => t.name)}
           activeTheme={themesFile.activeTheme}
+          onPreviewTheme={setPreviewThemeName}
           onSubmit={({ settings, theme }) => {
             setConfig((prev) => ({ ...prev, settings }));
             setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
+            setPreviewThemeName(null);
             setOverlay(null);
             flash("Saved settings");
           }}
-          onCancel={() => setOverlay(null)}
+          onCancel={() => {
+            setPreviewThemeName(null);
+            setOverlay(null);
+          }}
         />
       );
     } else if (overlay.kind === "confirmDeleteGroup") {
