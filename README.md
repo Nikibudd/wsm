@@ -7,45 +7,35 @@ down automatically as the new one opens.
 
 ## Install
 
+### From a release
+
+Download `wsm.mjs` from the [Releases page](https://github.com/Nikibudd/wsm/releases) — it's a single
+self-contained file (all dependencies bundled in), the only requirement is
+Node.js (20+) installed. Then:
+
 ```bash
+chmod +x wsm.mjs
+mkdir -p ~/.local/bin
+mv wsm.mjs ~/.local/bin/wsm
+```
+
+Make sure `~/.local/bin` is on your `PATH` (add `export PATH="$HOME/.local/bin:$PATH"`
+to your shell rc file if it isn't), then confirm with `wsm --version`. Any
+directory already on your `PATH` works the same way — e.g. `/opt/homebrew/bin`
+on Apple Silicon Homebrew installs.
+
+### Build it yourself
+
+Same end result as downloading a release, just self-built from source:
+
+```bash
+git clone https://github.com/Nikibudd/wsm.git
+cd wsm
 npm install
 npm run build
-npm link   # makes the `wsmdev` command available globally
+npm run bundle        # -> release/wsm.mjs, already executable
+mv release/wsm.mjs ~/.local/bin/wsm
 ```
-
-`npm link` installs the command as `wsmdev`, not `wsm` — a locally-linked
-dev build and an installed release can coexist without clashing, and
-`wsmdev` automatically uses a separate `~/.config/workspace-manager-dev`
-config directory so testing changes can't touch your real config. Run
-`npm run build` again after any source change to pick it up; `npm link`
-itself only needs re-running if `package.json`'s `bin` field changes.
-
-## Tests
-
-```bash
-npm test          # run once
-npm run test:watch
-```
-
-Jest runs in real ESM mode (`node --experimental-vm-modules`) rather than
-via `ts-jest`, since `ts-jest` doesn't yet support this project's TypeScript
-version. Source files are transpiled by `babel-jest` (types/JSX stripped
-only — `tsc` still does the real type-checking in `npm run build`). Tests
-never touch your real `~/.config/workspace-manager` — each one points
-`WSM_CONFIG_DIR` at a throwaway temp directory.
-
-- `test/paths.test.ts`, `test/config.test.ts`, `test/state.test.ts` — pure
-  file/env logic (defaults, malformed-file recovery, round-tripping).
-- `test/launcher.test.ts` — `open`/`close` behavior with `child_process`
-  mocked (interactive-shell invocation, cwd resolution incl. split layout,
-  close-command precedence, `--no-close` stacking) — no real processes are
-  ever spawned.
-- `test/app.test.tsx` — TUI interaction via
-  [`ink-testing-library`](https://github.com/vadimdemedes/ink-testing-library)
-  (simulated keypresses against the real component tree): workspace
-  creation, split-column navigation/deletion, group cascade-delete, the
-  open-workspace indicator, and a regression test for a keystroke-dropping
-  race that once existed in fast text input.
 
 ## Usage
 
@@ -171,3 +161,49 @@ knows what to tear down and `wsm status` can report on it.
   commands, not just plain binaries.
 - Set `WSM_CONFIG_DIR` to point `wsm` at a different config/state directory
   (e.g. for testing) instead of `~/.config/workspace-manager`.
+
+## Contributing
+
+### Development setup
+
+```bash
+git clone https://github.com/Nikibudd/wsm.git
+cd wsm
+npm install
+npm run build
+npm link   # makes the `wsmdev` command available globally
+```
+
+`npm link` installs the command as `wsmdev`, not `wsm` — a locally-linked
+dev build and an installed release can coexist without clashing, and
+`wsmdev` automatically uses a separate `~/.config/workspace-manager-dev`
+config directory so testing changes can't touch your real config. Run
+`npm run build` again after any source change to pick it up; `npm link`
+itself only needs re-running if `package.json`'s `bin` field changes.
+
+### Tests
+
+```bash
+npm test          # run once
+npm run test:watch
+```
+
+Jest runs in real ESM mode (`node --experimental-vm-modules`) rather than
+via `ts-jest`, since `ts-jest` doesn't yet support this project's TypeScript
+version. Source files are transpiled by `babel-jest` (types/JSX stripped
+only — `tsc` still does the real type-checking in `npm run build`). Tests
+never touch your real `~/.config/workspace-manager` — each one points
+`WSM_CONFIG_DIR` at a throwaway temp directory.
+
+- `test/paths.test.ts`, `test/config.test.ts`, `test/state.test.ts` — pure
+  file/env logic (defaults, malformed-file recovery, round-tripping).
+- `test/launcher.test.ts` — `open`/`close` behavior with `child_process`
+  mocked (interactive-shell invocation, cwd resolution incl. split layout,
+  close-command precedence, `--no-close` stacking) — no real processes are
+  ever spawned.
+- `test/app.test.tsx` — TUI interaction via
+  [`ink-testing-library`](https://github.com/vadimdemedes/ink-testing-library)
+  (simulated keypresses against the real component tree): workspace
+  creation, split-column navigation/deletion, group cascade-delete, the
+  open-workspace indicator, and a regression test for a keystroke-dropping
+  race that once existed in fast text input.
