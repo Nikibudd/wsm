@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { openWorkspace, closeWorkspaces, statusReport } from "./launcher.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, workspaceNames } from "./config.js";
 import { runTui } from "./tui/index.js";
+import { bashCompletionScript, zshCompletionScript } from "./completion.js";
 
 const program = new Command();
 
@@ -36,8 +37,13 @@ program
   .command("list")
   .alias("ls")
   .description("List configured workspaces")
-  .action(() => {
+  .option("--names-only", "print just the workspace names, one per line (for shell completion)")
+  .action((options: { namesOnly?: boolean }) => {
     const config = loadConfig();
+    if (options.namesOnly) {
+      for (const name of workspaceNames(config)) console.log(name);
+      return;
+    }
     if (config.workspaces.length === 0) {
       console.log('No workspaces configured yet. Run "wsm" to create one.');
       return;
@@ -52,6 +58,21 @@ program
   .description("Show currently open workspace(s)")
   .action(() => {
     console.log(statusReport());
+  });
+
+program
+  .command("completion <shell>")
+  .description("Print a shell completion script for bash or zsh (eval it in your rc file)")
+  .action((shell: string) => {
+    const commandNames = program.commands.map((c) => c.name());
+    if (shell === "bash") {
+      console.log(bashCompletionScript(commandNames));
+    } else if (shell === "zsh") {
+      console.log(zshCompletionScript(commandNames));
+    } else {
+      console.error(`Unsupported shell "${shell}". Expected "bash" or "zsh".`);
+      process.exitCode = 1;
+    }
   });
 
 async function main() {

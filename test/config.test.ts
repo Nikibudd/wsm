@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, saveConfig, findWorkspace } from "../src/config.js";
+import { loadConfig, saveConfig, findWorkspace, workspaceNames } from "../src/config.js";
 import type { Config } from "../src/types.js";
 
 describe("config", () => {
@@ -81,5 +81,19 @@ describe("config", () => {
     };
     expect(findWorkspace(config, "b")?.name).toBe("b");
     expect(findWorkspace(config, "missing")).toBeUndefined();
+  });
+
+  test("workspaceNames returns the configured workspace names in order", () => {
+    const config: Config = {
+      workspaces: [
+        { name: "b", items: [] },
+        { name: "a", items: [] },
+      ],
+    };
+    expect(workspaceNames(config)).toEqual(["b", "a"]);
+  });
+
+  test("workspaceNames returns an empty array for an empty config", () => {
+    expect(workspaceNames({ workspaces: [] })).toEqual([]);
   });
 });
