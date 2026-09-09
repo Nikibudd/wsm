@@ -67,10 +67,12 @@ src/
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
   cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
   completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
+  theme.ts       load/save ~/.config/workspace-manager/themes.json, built-in themes
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
-    Form.tsx     generic keyboard-driven form + ItemForm/WorkspaceForm/RenameGroupForm
+    Form.tsx     generic keyboard-driven form + ItemForm/WorkspaceForm/RenameGroupForm/SettingsForm
     ConfirmDialog.tsx
+    ThemeContext.tsx  React context/useTheme() consumed by every color-bearing component
     index.tsx    alt-screen enter/exit, renders <App/>
 test/            jest, mirrors src/ one file per module + app.test.tsx for the TUI
 ```
@@ -91,6 +93,29 @@ key never needs an `undefined` check at the call site. Edited via the TUI's
 Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
 `Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
 cycled with ←→) for each boolean rather than introducing a new field kind.
+
+TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
+(`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
+`config.yaml`/`settings` because it's display state, not workspace config.
+`src/theme.ts` owns the pure load/save/`getActiveTheme` logic and ships three
+built-in themes (Default — the plain ANSI palette this TUI had before
+theming existed — Catppuccin Mocha, Dracula); `src/tui/ThemeContext.tsx` is a
+React context (`ThemeProvider`/`useTheme()`) that every color-bearing
+component in `App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is
+no prop-drilling. Switching is TUI-only, from the same Settings overlay
+(theme is just a third field in `SettingsForm`); **creating** a new theme is
+file-only — hand-edit `themes.json` (add an entry to `themes`, point
+`activeTheme` at it) — there's no in-TUI theme editor. Verifying a theme
+change actually renders can't be done by asserting on `lastFrame()` text
+(colors are ANSI escapes around the text, not part of it); the real check is
+computing the expected `chalk.hex(...)`/named-color escape sequence and
+confirming it's a substring of the raw frame — see the ad hoc script used to
+verify this feature (not kept in the repo; recreate similarly if theme
+rendering regresses).
+
+Muted/secondary text (`dimColor`) intentionally stays untethered to the
+theme — `dimColor` dims whatever the terminal's current foreground already
+is, so it looks correct under any theme without needing its own color role.
 
 ## Lessons learned (don't regress these)
 

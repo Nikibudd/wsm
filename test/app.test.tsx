@@ -267,12 +267,39 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(RIGHT); // "Flag only" -> "Auto-remove from state.json"
     await flush();
-    stdin.write(ENTER); // last field -> submit
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    stdin.write(ENTER); // last field, left as "Default" -> submit
     await flush();
 
     unmount();
 
     const config = readConfigYaml(tmpDir);
     expect(config.settings).toEqual({ defaultClose: false, autoPruneStaleSessions: true });
+  });
+
+  test("cycling and saving the Theme field persists the selection to themes.json", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    stdin.write(ENTER); // -> Dead sessions field
+    await flush();
+    stdin.write(ENTER); // -> Theme field
+    await flush();
+    expect(lastFrame()).toContain("Default");
+
+    stdin.write(RIGHT); // Default -> Catppuccin Mocha
+    await flush();
+    expect(lastFrame()).toContain("Catppuccin Mocha");
+
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const themes = JSON.parse(fs.readFileSync(path.join(tmpDir, "themes.json"), "utf8"));
+    expect(themes.activeTheme).toBe("Catppuccin Mocha");
   });
 });

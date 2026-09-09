@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import type { ItemSide, ItemType, Settings, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
+import { useTheme } from "./ThemeContext.js";
 
 export interface FieldOption {
   label: string;
@@ -38,7 +39,7 @@ interface FormProps {
 
 export function Form({
   title,
-  accentColor = "cyan",
+  accentColor,
   fields,
   values,
   error,
@@ -49,6 +50,8 @@ export function Form({
 }: FormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
   const { stdout } = useStdout();
+  const theme = useTheme();
+  const resolvedAccent = accentColor ?? theme.accent;
   const width = Math.max(40, Math.min(68, (stdout?.columns || 80) - 4));
 
   useEffect(() => {
@@ -125,12 +128,12 @@ export function Form({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor={accentColor}
+      borderColor={resolvedAccent}
       paddingX={2}
       paddingY={1}
       width={width}
     >
-      <Text bold color={accentColor}>
+      <Text bold color={resolvedAccent}>
         {title}
       </Text>
       <Box height={1} />
@@ -140,7 +143,7 @@ export function Form({
         return (
           <Box key={f.key}>
             <Box width={16}>
-              <Text color={focused ? accentColor : "gray"}>
+              <Text color={focused ? resolvedAccent : theme.border}>
                 {focused ? "› " : "  "}
                 {f.label}
               </Text>
@@ -148,18 +151,20 @@ export function Form({
             <Box flexGrow={1}>
               {f.kind === "text" ? (
                 focused ? (
-                  <Text color="white">
+                  <Text color={theme.text}>
                     {value || (f.placeholder ? "" : "")}
-                    <Text backgroundColor="white" color="black">
+                    <Text backgroundColor={theme.text} color={theme.selectionText}>
                       {" "}
                     </Text>
                     {!value && f.placeholder ? <Text dimColor> {f.placeholder}</Text> : null}
                   </Text>
                 ) : (
-                  <Text color={value ? "white" : "gray"}>{value || f.placeholder || "—"}</Text>
+                  <Text color={value ? theme.text : theme.border}>
+                    {value || f.placeholder || "—"}
+                  </Text>
                 )
               ) : (
-                <Text color={focused ? "yellow" : "white"}>
+                <Text color={focused ? resolvedAccent : theme.text}>
                   ‹ {f.options?.find((o) => o.value === value)?.label ?? value} ›
                 </Text>
               )}
@@ -170,7 +175,7 @@ export function Form({
       {error ? (
         <>
           <Box height={1} />
-          <Text color="red">{error}</Text>
+          <Text color={theme.danger}>{error}</Text>
         </>
       ) : null}
       <Box height={1} />
@@ -419,18 +424,28 @@ export function WorkspaceForm({
   );
 }
 
+export interface SettingsFormResult {
+  settings: Required<Settings>;
+  theme: string;
+}
+
 export function SettingsForm({
   existing,
+  themeNames,
+  activeTheme,
   onSubmit,
   onCancel,
 }: {
   existing: Required<Settings>;
-  onSubmit: (result: Required<Settings>) => void;
+  themeNames: string[];
+  activeTheme: string;
+  onSubmit: (result: SettingsFormResult) => void;
   onCancel: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({
     defaultClose: existing.defaultClose ? "close" : "keep",
     autoPruneStaleSessions: existing.autoPruneStaleSessions ? "on" : "off",
+    theme: activeTheme,
   });
 
   const fields: FieldDef[] = [
@@ -452,12 +467,21 @@ export function SettingsForm({
         { label: "Auto-remove from state.json", value: "on" },
       ],
     },
+    {
+      key: "theme",
+      label: "Theme",
+      kind: "select",
+      options: themeNames.map((name) => ({ label: name, value: name })),
+    },
   ];
 
   const handleSubmit = () => {
     onSubmit({
-      defaultClose: values.defaultClose === "close",
-      autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
+      settings: {
+        defaultClose: values.defaultClose === "close",
+        autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
+      },
+      theme: values.theme,
     });
   };
 
