@@ -196,6 +196,33 @@ describe("launcher", () => {
     expect(remaining).toEqual(["b"]);
   });
 
+  test("statusReport flags a session item whose tracked pid is no longer running", async () => {
+    seedConfig({
+      workspaces: [
+        {
+          name: "demo",
+          items: [
+            { name: "alive-item", type: "command", launch: "sleep 300" },
+            { name: "dead-item", type: "command", launch: "sleep 300" },
+          ],
+        },
+      ],
+    });
+    await launcher.openWorkspace("demo", {});
+
+    const state = stateModule.loadState();
+    const deadPid = state.sessions[0]!.items[1]!.pid!;
+    killSpy.mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid === deadPid && signal === 0) throw new Error("ESRCH");
+      return true;
+    }) as typeof process.kill);
+
+    const report = launcher.statusReport();
+
+    expect(report).toMatch(/alive-item \[pid \d+\]\s*$/m);
+    expect(report).toContain(`dead-item [pid ${deadPid}] (not running)`);
+  });
+
   test("closeWorkspaces() with no name/all closes only the most recently opened session", async () => {
     seedConfig({
       workspaces: [
