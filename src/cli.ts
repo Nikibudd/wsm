@@ -5,13 +5,19 @@ import { loadConfig, workspaceNames, getSettings } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
 import { bashCompletionScript, zshCompletionScript } from "./completion.js";
+// Real ESM JSON import, not a hardcoded version string — this also has to
+// work standalone-bundled (release/wsm.mjs ships with no package.json next
+// to it): esbuild resolves/inlines JSON imports at *bundle* time, so the
+// bundled output embeds whatever package.json said as of `npm run bundle`,
+// with no runtime file read at all. See AGENTS.md.
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
 program
   .name("wsm")
   .description("Fast CLI workspace switcher for coding projects (run with no args for the config TUI)")
-  .version("1.0.0");
+  .version(pkg.version);
 
 program
   .command("open <name>")

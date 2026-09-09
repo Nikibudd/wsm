@@ -476,4 +476,23 @@ into `main` that should produce a new release.** If you merge a PR without
 bumping the version, the release step fails on purpose (`gh release create`
 errors on a tag that already exists) rather than silently overwriting or
 skipping — that failure is the intended signal to go bump the version, not
-a bug to route around.
+a bug to route around. Use `npm version <x.y.z> --no-git-tag-version` to
+bump both `package.json` and `package-lock.json` consistently in one step
+without npm's own auto-commit/auto-tag behavior getting in the way.
+
+`wsm --version` reads this same field — `cli.ts` imports `package.json`
+directly (`import pkg from "../package.json" with { type: "json" }`), it
+does **not** hardcode a version string. It used to (`.version("1.0.0")`
+literally in source), silently drifting from `package.json` — caught when a
+1.1.0 bump still printed `1.0.0` from the freshly-built bundle. This import
+form is deliberate, not incidental: it has to work correctly in all three
+ways `wsm` runs — `tsx src/cli.ts`, compiled `dist/cli.js`, and the
+standalone bundled `release/wsm.mjs`, which ships with **no** `package.json`
+next to it at all. A runtime `fs.readFileSync` relative to the module's own
+path (the seemingly-obvious fix) would work for the first two but break the
+third. The JSON import works for all three because esbuild resolves/inlines
+JSON imports at *bundle* time — the bundled output embeds whatever
+`package.json` said as of `npm run bundle`, no runtime file read involved.
+Confirmed by running the bundled binary from a directory with no
+`package.json` anywhere nearby. Needs `resolveJsonModule: true` in
+`tsconfig.json` for `tsc` to accept it.
