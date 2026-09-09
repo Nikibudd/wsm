@@ -23,6 +23,15 @@ Branch new work from `develop`, not `main`; `main` only advances via a merge
 from `develop` (a "release"). A remote (`origin`, GitHub) exists and every
 branch is expected to be pushed there.
 
+**Do not merge a feature branch into `develop` yourself, and do not push.**
+Create the feature branch and commit to it — that's the whole scope. The
+user pushes it and merges into `develop` manually via a PR (this is also
+what `.github/workflows/ci.yml`'s PR-triggered build+test is for — it needs
+an actual PR to run against). This is a deliberate change from earlier in
+this project's history, where merging feature branches into `develop`
+directly (no PR) was the norm — don't follow that older pattern now that
+it's been explicitly overridden.
+
 The history was reconstructed after the fact — the code across several early
 features was actually written in one continuous session with nothing
 committed, then split into per-feature branches/commits afterward to look
