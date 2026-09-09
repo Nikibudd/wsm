@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "wsm": "dist/cli.js"
+    "wsmdev": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",

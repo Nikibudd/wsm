@@ -195,6 +195,23 @@ is, so it looks correct under any theme without needing its own color role.
   `WSM_CONFIG_DIR` at a throwaway temp directory. This matters doubly here
   because the user has real, hand-built config in there.
 
+  This is now also structurally enforced, not just discipline: `wsm` and
+  `wsmdev` are the exact same `dist/cli.js`, symlinked under two names —
+  `package.json`'s `bin` field only declares `"wsmdev"`, so `npm link` (the
+  dev workflow) never creates anything named `wsm`; the real `wsm` name is
+  reserved for an installed release build (see README's "From a release").
+  `paths.ts`'s `getConfigDir()` reads `process.argv[1]`'s basename (the
+  *invoked* symlink name — confirmed this isn't realpath-resolved, so `wsm`
+  vs `wsmdev` are reliably distinguishable despite being the same file) and
+  only uses the real `~/.config/workspace-manager` when invoked as exactly
+  `"wsm"`; anything else — `wsmdev`, a direct `node dist/cli.js`, `tsx
+  src/cli.ts` (`npm run dev`) — falls back to a separate
+  `~/.config/workspace-manager-dev` sandbox. `WSM_CONFIG_DIR` still
+  overrides both, top priority, unchanged (tests always set it, so this
+  default-selection logic never fires under test). Point: a locally-linked
+  dev build now can't touch daily-driver config just because someone forgot
+  to set `WSM_CONFIG_DIR` — the default itself is safe.
+
 - **`loadConfig()`/`loadState()` must never throw** on a missing, empty, or
   malformed file — always fall back to the default shape. (`loadConfig` was
   missing this for a while; `loadState` had it from the start. Keep them
@@ -212,15 +229,17 @@ is, so it looks correct under any theme without needing its own color role.
   ever add UI/validation around item close config, flag this combination
   rather than silently honoring the priority order.
 
-- **The globally-linked `wsm` runs compiled `dist/cli.js`, not `src/`.**
-  Editing source has zero effect on the real `wsm` command (the one the user
-  runs for actual daily switching) until `npm run build` completes. This
-  isn't just a "remember to build" note — `wsm` is the user's real daily
-  driver, so testing against a stale build after a source edit means
-  silently verifying old behavior and concluding a fix works when it hasn't
+- **The globally-linked `wsmdev` runs compiled `dist/cli.js`, not `src/`.**
+  Editing source has zero effect on `wsmdev` until `npm run build`
+  completes — test against a stale build after a source edit and you're
+  silently verifying old behavior, concluding a fix works when it hasn't
   been exercised at all. `npm link` itself only needs re-running if
   `package.json`'s `bin` field or package name changes, which is rare —
-  don't confuse the two steps.
+  don't confuse the two steps. Separately: `wsm` (if the user has a release
+  installed — see README's "From a release") is a distinct, independent
+  file, not something building this repo touches at all — don't assume
+  `npm run build` affects the user's `wsm` command the way it used to
+  before the `wsm`/`wsmdev` split (see the config-dir note above).
 
 - **A tracked `SessionItem.pid` is the *launcher shell's* pid, not
   necessarily the thing the launch command started — for anything that
@@ -369,11 +388,11 @@ a gap worth closing, not as the normal workflow.
 
 ```bash
 npm run build   # tsc -> dist/, chmod +x dist/cli.js — run this after every
-                # src/ change before testing the real `wsm` command
+                # src/ change before testing the real `wsmdev` command
 npm run bundle  # dist/ -> release/wsm.mjs, a single self-contained file
                 # (esbuild). Run `npm run build` first — see Releases below
-npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs)
-npm link        # expose `wsm` globally — only needs re-running if package.json's
+npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsmdev` runs)
+npm link        # expose `wsmdev` globally — only needs re-running if package.json's
                 # bin field or package name changes, not after ordinary edits
 ```
 
