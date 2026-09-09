@@ -232,6 +232,17 @@ is, so it looks correct under any theme without needing its own color role.
   dev build now can't touch daily-driver config just because someone forgot
   to set `WSM_CONFIG_DIR` — the default itself is safe.
 
+  **When manually verifying a change against the real CLI, invoke it as
+  `wsmdev`, never bare `wsm`.** This is sharper than the config-safety point
+  above: the user's real `wsm` is a separate, already-downloaded release
+  binary (`~/.local/bin/wsm` or similar — see README's "From a release"),
+  completely disconnected from this repo. Running `npm run build` never
+  touches it, and running bare `wsm` during development doesn't fail or
+  warn — it silently runs whatever unrelated code that release happens to
+  contain and reports success, giving false confidence that a change works
+  when it was never actually exercised. `wsmdev` is the only invocation that
+  reflects the current `dist/cli.js` build.
+
 - **`loadConfig()`/`loadState()` must never throw** on a missing, empty, or
   malformed file — always fall back to the default shape. (`loadConfig` was
   missing this for a while; `loadState` had it from the start. Keep them
