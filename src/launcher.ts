@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { expandHome } from "./paths.js";
 import { loadState, saveState } from "./state.js";
 import { loadConfig, findWorkspace } from "./config.js";
-import type { Session, SessionItem, Workspace, WorkspaceItem } from "./types.js";
+import type { Session, SessionItem, State, Workspace, WorkspaceItem } from "./types.js";
 
 function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
   if (item.cwd) return expandHome(item.cwd);
@@ -151,6 +151,24 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export function pruneDeadSessions(state: State): {
+  state: State;
+  pruned: { workspace: string; item: string }[];
+} {
+  const pruned: { workspace: string; item: string }[] = [];
+  const sessions: Session[] = [];
+  for (const session of state.sessions) {
+    const items = session.items.filter((item) => {
+      const alive = !item.pid || isPidAlive(item.pid);
+      if (!alive) pruned.push({ workspace: session.workspace, item: item.name });
+      return alive;
+    });
+    if (items.length > 0) sessions.push(items.length === session.items.length ? session : { ...session, items });
+  }
+  if (pruned.length === 0) return { state, pruned };
+  return { state: { sessions }, pruned };
 }
 
 export function statusReport(): string {

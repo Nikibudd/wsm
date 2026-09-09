@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { load, dump } from "js-yaml";
 import { getConfigFile, ensureConfigDir } from "./paths.js";
-import type { Config, Workspace } from "./types.js";
+import type { Config, Settings, Workspace } from "./types.js";
 
 function defaultConfig(): Config {
   return { workspaces: [] };
@@ -36,4 +36,13 @@ export function findWorkspace(config: Config, name: string): Workspace | undefin
 
 export function workspaceNames(config: Config): string[] {
   return config.workspaces.map((w) => w.name);
+}
+
+const DEFAULT_SETTINGS: Required<Settings> = {
+  defaultClose: true,
+  autoPruneStaleSessions: false,
+};
+
+export function getSettings(config: Config): Required<Settings> {
+  return { ...DEFAULT_SETTINGS, ...config.settings };
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { openWorkspace, closeWorkspaces, statusReport } from "./launcher.js";
-import { loadConfig, workspaceNames } from "./config.js";
+import { openWorkspace, closeWorkspaces, statusReport, pruneDeadSessions } from "./launcher.js";
+import { loadConfig, workspaceNames, getSettings } from "./config.js";
+import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
 import { bashCompletionScript, zshCompletionScript } from "./completion.js";
 
@@ -14,11 +15,19 @@ program
 
 program
   .command("open <name>")
-  .description("Open a configured workspace, closing any currently open workspace first")
-  .option("--no-close", "keep the currently open workspace(s) running instead of closing them")
-  .action(async (name: string, options: { close: boolean }) => {
+  .description(
+    "Open a configured workspace (closes any currently open workspace first, unless configured otherwise)",
+  )
+  .option("--close", "close the currently open workspace(s) first, overriding the configured default")
+  .option(
+    "--no-close",
+    "keep the currently open workspace(s) running instead of closing them, overriding the configured default",
+  )
+  .action(async (name: string, options: { close?: boolean }) => {
     try {
-      await openWorkspace(name, { noClose: !options.close });
+      const settings = getSettings(loadConfig());
+      const shouldClose = options.close ?? settings.defaultClose;
+      await openWorkspace(name, { noClose: !shouldClose });
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;
@@ -57,6 +66,14 @@ program
   .command("status")
   .description("Show currently open workspace(s)")
   .action(() => {
+    const settings = getSettings(loadConfig());
+    if (settings.autoPruneStaleSessions) {
+      const { state, pruned } = pruneDeadSessions(loadState());
+      if (pruned.length > 0) {
+        saveState(state);
+        for (const p of pruned) console.log(`Pruned stale session item: ${p.workspace} › ${p.item}`);
+      }
+    }
     console.log(statusReport());
   });
 
