@@ -111,6 +111,18 @@ the persisted theme without writing `themes.json`). **Creating** a new theme
 is file-only — hand-edit `themes.json` (add an entry to `themes`, point
 `activeTheme` at it) — there's no in-TUI theme editor.
 
+`loadThemes()` merges any `DEFAULT_THEMES` entry missing from an existing
+file (matched by name) into what it returns — don't drop this. Without it,
+an already-auto-created `themes.json` (the TUI writes one on first run,
+before the user ever touches it) permanently shadows every `DEFAULT_THEMES`
+array shipped after that point: real bug hit while building this — a user
+had a 3-theme file from before Nord/Gruvbox Dark/Tokyo Night/Solarized Dark
+existed, rebuilt `dist/`, and still saw only 3, because `loadThemes()` only
+fell back to `DEFAULT_THEMES` for a *missing* file, never merged into an
+*existing* one. Only names absent from the file are added; anything already
+present — built-in or a user's own custom colors saved under a built-in's
+name — is left untouched.
+
 **Ink never emits color in `ink-testing-library`'s `lastFrame()` unless
 `FORCE_COLOR` is set — and this produces false-positive passes, not
 failures, so it's easy to ship an unverified color bug believing it's

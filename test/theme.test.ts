@@ -73,7 +73,7 @@ describe("theme", () => {
     expect(loadThemes().themes).toEqual(DEFAULT_THEMES);
   });
 
-  test("saveThemes then loadThemes round-trips a custom theme list and active selection", () => {
+  test("saveThemes then loadThemes round-trips a custom theme's own definition and active selection", () => {
     const custom: ThemesFile = {
       activeTheme: "Midnight",
       themes: [
@@ -82,7 +82,46 @@ describe("theme", () => {
       ],
     };
     saveThemes(custom);
-    expect(loadThemes()).toEqual(custom);
+    const loaded = loadThemes();
+    expect(loaded.activeTheme).toBe("Midnight");
+    expect(loaded.themes).toEqual(expect.arrayContaining(custom.themes));
+  });
+
+  test("loadThemes merges any built-in themes missing from an existing (e.g. older) file, without touching what's already there", () => {
+    // Reproduces a real file saved before Nord/Gruvbox Dark/Tokyo Night/
+    // Solarized Dark existed: only Default, Catppuccin Mocha, and Dracula on
+    // disk. Adding a built-in theme in code must not strand already-running
+    // installs on whatever DEFAULT_THEMES looked like when their themes.json
+    // was first auto-created.
+    const older: ThemesFile = {
+      activeTheme: "Catppuccin Mocha",
+      themes: [
+        DEFAULT_THEMES.find((t) => t.name === "Default")!,
+        DEFAULT_THEMES.find((t) => t.name === "Catppuccin Mocha")!,
+        DEFAULT_THEMES.find((t) => t.name === "Dracula")!,
+      ],
+    };
+    saveThemes(older);
+
+    const loaded = loadThemes();
+
+    expect(loaded.activeTheme).toBe("Catppuccin Mocha"); // selection untouched
+    expect(loaded.themes.map((t) => t.name)).toEqual(
+      expect.arrayContaining(DEFAULT_THEMES.map((t) => t.name)),
+    );
+    expect(loaded.themes).toHaveLength(DEFAULT_THEMES.length);
+  });
+
+  test("loadThemes does not overwrite a user's own customized colors for a built-in-named theme", () => {
+    const customizedDracula: ThemesFile = {
+      activeTheme: "Dracula",
+      themes: [{ name: "Dracula", colors: { ...DEFAULT_THEMES.find((t) => t.name === "Dracula")!.colors, accent: "#ffffff" } }],
+    };
+    saveThemes(customizedDracula);
+
+    const loaded = loadThemes();
+
+    expect(loaded.themes.find((t) => t.name === "Dracula")!.colors.accent).toBe("#ffffff");
   });
 
   test("getActiveTheme resolves the theme matching activeTheme by name", () => {

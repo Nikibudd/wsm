@@ -145,6 +145,18 @@ function defaultThemesFile(): ThemesFile {
   return { activeTheme: DEFAULT_THEMES[0]!.name, themes: DEFAULT_THEMES };
 }
 
+// Adds any built-in theme not already present (matched by name) to an
+// existing file's theme list, so shipping a new built-in theme doesn't
+// strand installs whose themes.json was auto-created before it existed. A
+// name that's already present — built-in or user-customized under a
+// built-in's name — is left exactly as saved, never overwritten.
+function withMissingBuiltins(file: ThemesFile): ThemesFile {
+  const existingNames = new Set(file.themes.map((t) => t.name));
+  const missing = DEFAULT_THEMES.filter((t) => !existingNames.has(t.name));
+  if (missing.length === 0) return file;
+  return { ...file, themes: [...file.themes, ...missing] };
+}
+
 // New custom themes can be added by hand-editing themes.json (appending to
 // `themes` and pointing `activeTheme` at the new entry) — there's no
 // in-TUI theme creator, only switching between whatever's in the file.
@@ -161,7 +173,7 @@ export function loadThemes(): ThemesFile {
     if (!parsed || !Array.isArray(parsed.themes) || parsed.themes.length === 0) {
       return defaultThemesFile();
     }
-    return parsed;
+    return withMissingBuiltins(parsed);
   } catch {
     return defaultThemesFile();
   }
