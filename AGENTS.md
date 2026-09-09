@@ -5,6 +5,33 @@ fast day-to-day switching; the full-screen Ink/React TUI (`wsm` with no args)
 is for configuration only — don't blur that line by adding config-editing to
 the CLI or long-running interactive flows to the TUI's non-interactive paths.
 
+## Keep this file current
+
+When you learn something new about *developing this project* — a gotcha, a
+non-obvious root cause, a tooling constraint, a design decision and why it
+was made — add it to this file before finishing the task, not just to your
+own response. This file is only useful if it stays a living record; don't
+let knowledge evaporate at the end of the conversation it was learned in.
+Scope: this is about wsm's own codebase/tooling (the "Lessons learned" and
+similar sections below), not the user's unrelated projects or one-off
+environment/git operations — those don't belong here.
+
+## Git workflow
+
+This repo uses a git-flow-style model: `main` ← `develop` ← `feature/*`.
+Branch new work from `develop`, not `main`; `main` only advances via a merge
+from `develop` (a "release"). A remote (`origin`, GitHub) exists and every
+branch is expected to be pushed there.
+
+The history was reconstructed after the fact — the code across several early
+features was actually written in one continuous session with nothing
+committed, then split into per-feature branches/commits afterward to look
+like normal incremental development. The commit *content* and ordering are
+accurate (verified by diffing the fully-merged tree against the original
+uncommitted state — it matched exactly), but don't read timestamps or the
+number of commits per feature as literal evidence of how long something took
+or how many sittings it happened over.
+
 ## Workflow: tests first, then code
 
 **Write the test before the implementation.** When adding a feature or fixing
@@ -99,6 +126,38 @@ in which case each item picks a `side`. Single-folder is always the default;
   missing this for a while; `loadState` had it from the start. Keep them
   consistent.)
 
+- **An item's close method is one of three, in strict priority order —
+  `close` (explicit command) > `closeAppName` (AppleScript quit) > killing
+  the tracked pid — never a combination.** `closeSessionItem` in
+  `launcher.ts` checks `close` first and returns immediately if it's set, so
+  setting both `close` and `closeAppName` on the same item silently drops
+  `closeAppName` with no warning. Real mistake made configuring a user
+  workspace: added a bogus `close: "quit intellij"` (not a real shell
+  command) alongside a correct `closeAppName: "IntelliJ IDEA"` — the bogus
+  command would have run instead of the working AppleScript quit. If you
+  ever add UI/validation around item close config, flag this combination
+  rather than silently honoring the priority order.
+
+- **The globally-linked `wsm` runs compiled `dist/cli.js`, not `src/`.**
+  Editing source has zero effect on the real `wsm` command (the one the user
+  runs for actual daily switching) until `npm run build` completes. This
+  isn't just a "remember to build" note — `wsm` is the user's real daily
+  driver, so testing against a stale build after a source edit means
+  silently verifying old behavior and concluding a fix works when it hasn't
+  been exercised at all. `npm link` itself only needs re-running if
+  `package.json`'s `bin` field or package name changes, which is rare —
+  don't confuse the two steps.
+
+- **Sessions stack by name, they don't dedupe.** `wsm open <name> --no-close`
+  pushes a new session onto `state.json` without checking whether a session
+  for that same workspace name already exists — you can end up with two (or
+  more) concurrent recorded sessions for one workspace name. `closeWorkspaces`
+  given an explicit name closes **every** session matching that name, not
+  just the most recent; only the no-args form (`wsm close`) targets a single
+  session (the last one opened). This is intentional, not a bug — but it
+  reads as surprising ("why did closing print two 'Closing workspace...'
+  blocks?") if you don't know it going in.
+
 ## Testing
 
 ```bash
@@ -127,10 +186,22 @@ to CommonJS by Babel, or it breaks.
   `config.yaml`. `await flush()` (a small `setTimeout`) between keystrokes
   gives React a tick to commit before the next one.
 
+Before `app.test.tsx` existed, TUI changes were verified with one-off Python
+scripts driving a real pseudo-terminal (`pty.openpty()` + raw keystroke
+bytes) — that's how the `ink-text-input` keystroke-loss bug was originally
+found. That approach is no longer the default: extend `app.test.tsx` for new
+TUI behavior instead of writing a fresh throwaway pty script each time. Fall
+back to a manual pty script only for something Jest genuinely can't express
+(e.g. checking real terminal resize handling, or literal alt-screen escape
+sequences written to a real tty), and treat that as a sign the test suite has
+a gap worth closing, not as the normal workflow.
+
 ## Commands
 
 ```bash
-npm run build   # tsc -> dist/, chmod +x dist/cli.js
-npm run dev     # tsx src/cli.ts (no build step)
-npm link        # expose `wsm` globally (re-run after dependency changes)
+npm run build   # tsc -> dist/, chmod +x dist/cli.js — run this after every
+                # src/ change before testing the real `wsm` command
+npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs)
+npm link        # expose `wsm` globally — only needs re-running if package.json's
+                # bin field or package name changes, not after ordinary edits
 ```
