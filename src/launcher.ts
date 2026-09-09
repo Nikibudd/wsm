@@ -154,6 +154,45 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+function isAppRunning(appName: string): boolean {
+  try {
+    const result = spawnSync("osascript", ["-e", `tell application "${appName}" to running`], {
+      encoding: "utf8",
+    });
+    return result.stdout?.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+// Whether an item is actually still running — true/false when we have a
+// reliable signal, null when we don't and refuse to guess.
+//
+// The tracked `item.pid` is the *launcher shell's* pid (from `$SHELL -i -c
+// "<launch>"`), not necessarily the thing the launch command started. For a
+// command that hands off to a detached process — `code .`, `open -a X .`,
+// `docker run -d ...` — that shell exits within moments of launching,
+// almost always well before the real app/container does. So a dead
+// launcher pid does NOT mean the item quit; it's the expected, permanent
+// state for anything launched this way, and treating it as "not running"
+// produces near-constant false positives for exactly the items (GUI apps,
+// backgrounded containers) this check exists to help with.
+//
+// - closeAppName items: ask macOS by name — `tell application "X" to
+//   running` — using the exact same name already used to quit it via
+//   `tell application "X" to quit`, so this is consistent with how closing
+//   already works and isn't a new naming convention.
+// - close-command items (arbitrary custom command, e.g. `docker stop ...`):
+//   no generic way to verify. Rather than guess from the (expectedly dead)
+//   launcher pid, report unknown — never flagged as stale, never pruned.
+// - everything else: closing this item IS killing item.pid directly, so
+//   that pid's liveness is accurate and meaningful here.
+function itemRunning(item: SessionItem): boolean | null {
+  if (item.closeAppName) return isAppRunning(item.closeAppName);
+  if (item.close) return null;
+  return !item.pid || isPidAlive(item.pid);
+}
+
 export function pruneDeadSessions(state: State): {
   state: State;
   pruned: { workspace: string; item: string }[];
@@ -162,9 +201,9 @@ export function pruneDeadSessions(state: State): {
   const sessions: Session[] = [];
   for (const session of state.sessions) {
     const items = session.items.filter((item) => {
-      const alive = !item.pid || isPidAlive(item.pid);
-      if (!alive) pruned.push({ workspace: session.workspace, item: item.name });
-      return alive;
+      const dead = itemRunning(item) === false;
+      if (dead) pruned.push({ workspace: session.workspace, item: item.name });
+      return !dead;
     });
     if (items.length > 0) sessions.push({ ...session, items });
   }
@@ -174,7 +213,7 @@ export function pruneDeadSessions(state: State): {
 interface SessionItemStatus {
   name: string;
   pid?: number;
-  running: boolean;
+  running: boolean | null;
 }
 
 interface SessionStatus {
@@ -184,7 +223,7 @@ interface SessionStatus {
 }
 
 // Shared by statusReport (human text) and statusJson (machine-readable) so
-// the "is this pid actually alive" check happens in exactly one place.
+// the liveness check happens in exactly one place.
 function buildStatus(state: State): SessionStatus[] {
   return state.sessions.map((session) => ({
     workspace: session.workspace,
@@ -192,7 +231,7 @@ function buildStatus(state: State): SessionStatus[] {
     items: session.items.map((item) => ({
       name: item.name,
       pid: item.pid,
-      running: !item.pid || isPidAlive(item.pid),
+      running: itemRunning(item),
     })),
   }));
 }
@@ -205,7 +244,7 @@ export function statusReport(state: State = loadState()): string {
     lines.push(`• ${session.workspace} (opened ${session.openedAt})`);
     for (const item of session.items) {
       const pidInfo = item.pid ? ` [pid ${item.pid}]` : "";
-      const stale = !item.running ? " (not running)" : "";
+      const stale = item.running === false ? " (not running)" : "";
       lines.push(`    - ${item.name}${pidInfo}${stale}`);
     }
   }

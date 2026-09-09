@@ -222,6 +222,37 @@ is, so it looks correct under any theme without needing its own color role.
   `package.json`'s `bin` field or package name changes, which is rare —
   don't confuse the two steps.
 
+- **A tracked `SessionItem.pid` is the *launcher shell's* pid, not
+  necessarily the thing the launch command started — for anything that
+  hands off to a detached process (`code .`, `open -a X .`, `docker run -d
+  ...`) that shell exits within moments, almost always long before the real
+  app/container does.** A dead tracked pid is the *expected, permanent*
+  state for these, not a sign anything quit. Real incident: `wsm status`'s
+  original pid-liveness check (`isPidAlive` alone) flagged an actually-
+  running VS Code as "(not running)" every time, because the `code .`
+  wrapper it spawned had already exited — confirmed by watching the tracked
+  pid die within ~1s of launch (`ps -p <pid>`) while `ps aux | grep "Visual
+  Studio Code"` showed the real Electron process still very much alive.
+  Worse: with `autoPruneStaleSessions` on, this would have **silently
+  deleted session records for still-running items** on every `wsm status`.
+  Fixed via `launcher.ts`'s `itemRunning(item): boolean | null`, which
+  picks the check by how the item is configured to close (mirrors the
+  existing close-priority order in spirit, not by coincidence):
+  - `closeAppName` set → `tell application "X" to running` (same app name
+    already used to quit it via `tell application "X" to quit` — consistent
+    with existing close logic, not a new naming convention to keep in sync).
+  - `close` set (arbitrary custom command, e.g. `docker stop ...`) → no
+    generic way to verify, so **unknown** (`null`) rather than guessed —
+    never flagged as stale, never auto-pruned. Guessing wrong here is worse
+    than not knowing: false "not running" erodes trust in the whole
+    feature, silent auto-prune loses track of something still open.
+  - neither set → the fallback close mechanism kills `item.pid` directly,
+    so that pid's own liveness is accurate and meaningful — no change here.
+  If you add a new close mechanism, give `itemRunning` a matching branch
+  rather than falling through to the raw pid check, which produces this
+  exact false-positive class for anything that isn't a foreground process
+  attached to the launcher shell.
+
 - **Sessions stack by name, they don't dedupe.** `wsm open <name> --no-close`
   pushes a new session onto `state.json` without checking whether a session
   for that same workspace name already exists — you can end up with two (or
