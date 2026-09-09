@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { openWorkspace, closeWorkspaces, statusReport, pruneDeadSessions } from "./launcher.js";
+import { openWorkspace, closeWorkspaces, statusReport, statusJson, pruneDeadSessions } from "./launcher.js";
 import { loadConfig, workspaceNames, getSettings } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
@@ -63,7 +63,8 @@ program
 program
   .command("status")
   .description("Show currently open workspace(s)")
-  .action(() => {
+  .option("--json", "print machine-readable JSON instead of the human-readable summary")
+  .action((options: { json?: boolean }) => {
     const settings = getSettings(loadConfig());
     let state = loadState();
     if (settings.autoPruneStaleSessions) {
@@ -71,10 +72,11 @@ program
       state = result.state;
       if (result.pruned.length > 0) {
         saveState(state);
-        for (const p of result.pruned) console.log(`Pruned stale session item: ${p.workspace} › ${p.item}`);
+        // stderr, not stdout: keeps --json's stdout output pure JSON for piping.
+        for (const p of result.pruned) console.error(`Pruned stale session item: ${p.workspace} › ${p.item}`);
       }
     }
-    console.log(statusReport(state));
+    console.log(options.json ? statusJson(state) : statusReport(state));
   });
 
 program

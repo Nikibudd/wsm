@@ -257,6 +257,49 @@ describe("launcher", () => {
     expect(report).toContain(`dead-item [pid ${deadPid}] (not running)`);
   });
 
+  test("statusJson returns machine-readable sessions with a running flag per item", async () => {
+    seedConfig({
+      workspaces: [
+        {
+          name: "demo",
+          items: [
+            { name: "alive-item", type: "command", launch: "sleep 300" },
+            { name: "dead-item", type: "command", launch: "sleep 300" },
+          ],
+        },
+      ],
+    });
+    await launcher.openWorkspace("demo", {});
+
+    const state = stateModule.loadState();
+    const alivePid = state.sessions[0]!.items[0]!.pid!;
+    const deadPid = state.sessions[0]!.items[1]!.pid!;
+    killSpy.mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid === deadPid && signal === 0) throw new Error("ESRCH");
+      return true;
+    }) as typeof process.kill);
+
+    const parsed = JSON.parse(launcher.statusJson());
+
+    expect(parsed).toEqual({
+      sessions: [
+        {
+          workspace: "demo",
+          openedAt: state.sessions[0]!.openedAt,
+          items: [
+            { name: "alive-item", pid: alivePid, running: true },
+            { name: "dead-item", pid: deadPid, running: false },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("statusJson returns an empty sessions array when nothing is open", () => {
+    const parsed = JSON.parse(launcher.statusJson());
+    expect(parsed).toEqual({ sessions: [] });
+  });
+
   test("pruneDeadSessions drops only the dead items, and drops a session entirely once all its items are dead", async () => {
     seedConfig({
       workspaces: [

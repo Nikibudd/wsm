@@ -171,16 +171,47 @@ export function pruneDeadSessions(state: State): {
   return { state: { sessions }, pruned };
 }
 
+interface SessionItemStatus {
+  name: string;
+  pid?: number;
+  running: boolean;
+}
+
+interface SessionStatus {
+  workspace: string;
+  openedAt: string;
+  items: SessionItemStatus[];
+}
+
+// Shared by statusReport (human text) and statusJson (machine-readable) so
+// the "is this pid actually alive" check happens in exactly one place.
+function buildStatus(state: State): SessionStatus[] {
+  return state.sessions.map((session) => ({
+    workspace: session.workspace,
+    openedAt: session.openedAt,
+    items: session.items.map((item) => ({
+      name: item.name,
+      pid: item.pid,
+      running: !item.pid || isPidAlive(item.pid),
+    })),
+  }));
+}
+
 export function statusReport(state: State = loadState()): string {
-  if (state.sessions.length === 0) return "No workspaces currently open.";
+  const sessions = buildStatus(state);
+  if (sessions.length === 0) return "No workspaces currently open.";
   const lines: string[] = [];
-  for (const session of state.sessions) {
+  for (const session of sessions) {
     lines.push(`• ${session.workspace} (opened ${session.openedAt})`);
     for (const item of session.items) {
       const pidInfo = item.pid ? ` [pid ${item.pid}]` : "";
-      const stale = item.pid && !isPidAlive(item.pid) ? " (not running)" : "";
+      const stale = !item.running ? " (not running)" : "";
       lines.push(`    - ${item.name}${pidInfo}${stale}`);
     }
   }
   return lines.join("\n");
+}
+
+export function statusJson(state: State = loadState()): string {
+  return JSON.stringify({ sessions: buildStatus(state) }, null, 2);
 }
