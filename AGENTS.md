@@ -271,7 +271,13 @@ is, so it looks correct under any theme without needing its own color role.
   `autoPruneStaleSessions` is on (once for `pruneDeadSessions`, again inside
   `statusReport`). Omitting it still calls `loadState()` internally, so
   existing no-arg callers/tests are unaffected — pass the state through
-  when you already have it loaded.
+  when you already have it loaded. `statusJson(state?)` is its
+  machine-readable sibling (`wsm status --json`), sharing the same
+  `buildStatus()` pid-liveness check internally so "is this pid alive"
+  isn't computed twice by two separate formatters. `wsm status --json`'s
+  auto-prune notification goes to **stderr** (`console.error`), not stdout
+  — the CLI's one place where that distinction matters, since stdout must
+  stay pure JSON for piping (`wsm status --json | jq ...`).
 
 - **`App.tsx`'s `rowStyle(selected, theme, fallbackColor?)` helper is the
   one place the "selected row" color pair (`selectionText`/`selectionBg` vs.
