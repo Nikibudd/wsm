@@ -33,3 +33,7 @@ export function saveConfig(config: Config): void {
 export function findWorkspace(config: Config, name: string): Workspace | undefined {
   return config.workspaces.find((w) => w.name === name);
 }
+
+export function workspaceNames(config: Config): string[] {
+  return config.workspaces.map((w) => w.name);
+}
