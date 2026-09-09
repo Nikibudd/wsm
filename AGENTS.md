@@ -370,6 +370,8 @@ a gap worth closing, not as the normal workflow.
 ```bash
 npm run build   # tsc -> dist/, chmod +x dist/cli.js — run this after every
                 # src/ change before testing the real `wsm` command
+npm run bundle  # dist/ -> release/wsm.mjs, a single self-contained file
+                # (esbuild). Run `npm run build` first — see Releases below
 npm run dev     # tsx src/cli.ts (no build step, but this is not what `wsm` runs)
 npm link        # expose `wsm` globally — only needs re-running if package.json's
                 # bin field or package name changes, not after ordinary edits
@@ -377,9 +379,51 @@ npm link        # expose `wsm` globally — only needs re-running if package.jso
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every PR targeting `develop`: `npm ci` →
-`npm run build` → `npm test`. The build step is there for a reason beyond
-"does it compile" — `babel-jest` (see Testing above) strips TypeScript types
-without checking them, so `npm test` passing on its own does **not** mean
-`tsc` would succeed. A type error can pass the whole test suite and only get
-caught by the separate `npm run build` step, in CI or locally.
+`.github/workflows/ci.yml` runs on every PR targeting `develop` or `main`:
+`npm ci` → `npm run build` → `npm test`. The build step is there for a
+reason beyond "does it compile" — `babel-jest` (see Testing above) strips
+TypeScript types without checking them, so `npm test` passing on its own
+does **not** mean `tsc` would succeed. A type error can pass the whole test
+suite and only get caught by the separate `npm run build` step, in CI or
+locally.
+
+## Releases
+
+`.github/workflows/release.yml` fires when a PR into `main` is merged (not
+on every push to `main` — gated on `github.event.pull_request.merged ==
+true`, since a closed-but-unmerged PR shouldn't cut a release) and publishes
+a GitHub Release with one attached asset: `release/wsm.mjs`, a single
+self-contained file — `dist/cli.js` and every dependency bundled together
+via esbuild (`npm run bundle`, see `scripts/bundle.mjs`). Users need Node.js
+installed but nothing else; no `node_modules`, no `npm install`. Verified by
+hand (real pty, not just `--version`) that the bundle's TUI actually renders
+correctly — Ink + `yoga-layout`'s WASM loader is exactly the kind of thing
+that's plausible to silently break under bundling, so this was worth
+confirming rather than assuming.
+
+Two non-obvious things baked into `scripts/bundle.mjs`, don't strip them
+without knowing why they're there:
+- **`react-devtools-core` is aliased to `scripts/react-devtools-core-stub.js`.**
+  It's an optional dependency ink only imports when `process.env.DEV ===
+  "true"` *and* a runtime `import.meta.resolve()` check confirms it's
+  actually installed (see `node_modules/ink/build/reconciler.js`) — neither
+  is true in normal `wsm` usage, so the real import is never reached. But
+  esbuild resolves the whole module graph statically at bundle time
+  regardless of that runtime gate, so bundling fails without *something* to
+  resolve it to. The stub is never actually invoked.
+  Same underlying theme as the `transformIgnorePatterns`/`yoga-layout` note
+  under Testing above: tools that process Ink's module graph by rules other
+  than Node's own module resolution are the recurring source of breakage
+  here — Babel force-transforming `yoga-layout`'s WASM loader there,
+  esbuild's static resolution ignoring a runtime gate here.
+- **The `createRequire` banner shim.** Some bundled CJS dependency expects a
+  real `require` in scope that esbuild's own CJS-interop wrapper doesn't
+  cover in every case.
+
+**Releases are tagged by `package.json`'s `"version"` field (`v<version>`),
+not by commit SHA or a running build number — bump it as part of any PR
+into `main` that should produce a new release.** If you merge a PR without
+bumping the version, the release step fails on purpose (`gh release create`
+errors on a tag that already exists) rather than silently overwriting or
+skipping — that failure is the intended signal to go bump the version, not
+a bug to route around.
