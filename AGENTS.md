@@ -65,7 +65,8 @@ src/
   config.ts      load/save ~/.config/workspace-manager/config.yaml
   state.ts       load/save ~/.config/workspace-manager/state.json (open sessions)
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
-  cli.ts         commander entry point (open/close/list/status; no-args -> TUI)
+  cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
+  completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
     Form.tsx     generic keyboard-driven form + ItemForm/WorkspaceForm/RenameGroupForm
@@ -157,6 +158,18 @@ in which case each item picks a `side`. Single-folder is always the default;
   session (the last one opened). This is intentional, not a bug — but it
   reads as surprising ("why did closing print two 'Closing workspace...'
   blocks?") if you don't know it going in.
+
+- **`cli.ts` itself has no test file — it's just commander wiring.** Keep it
+  that way: any actual logic a command needs (string building, script
+  generation, name extraction) belongs in its own `src/` module with a
+  matching `test/*.test.ts`, and `cli.ts`'s `.action()` should just call it.
+  `src/completion.ts` (bash/zsh completion script generation, tested via
+  string assertions on the generated script) and `config.workspaceNames()`
+  follow this — that's what let shell completion get TDD'd without spawning
+  a real child process per test. The generated scripts shell out to
+  `wsm list --names-only` at *completion* time (not script-generation time),
+  so completions stay in sync with `config.yaml` without regenerating or
+  reinstalling the script.
 
 ## Testing
 
