@@ -433,12 +433,14 @@ export function SettingsForm({
   existing,
   themeNames,
   activeTheme,
+  onPreviewTheme,
   onSubmit,
   onCancel,
 }: {
   existing: Required<Settings>;
   themeNames: string[];
   activeTheme: string;
+  onPreviewTheme: (name: string) => void;
   onSubmit: (result: SettingsFormResult) => void;
   onCancel: () => void;
 }) {
@@ -491,7 +493,13 @@ export function SettingsForm({
       fields={fields}
       values={values}
       submitLabel="save"
-      onChange={(k, updater) => setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }))}
+      onChange={(k, updater) =>
+        setValues((prev) => {
+          const next = { ...prev, [k]: updater(prev[k] ?? "") };
+          if (k === "theme" && next.theme !== prev.theme) onPreviewTheme(next.theme);
+          return next;
+        })
+      }
       onSubmit={handleSubmit}
       onCancel={onCancel}
     />

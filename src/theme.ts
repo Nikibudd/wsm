@@ -30,9 +30,9 @@ export interface ThemesFile {
 
 // "Default" reproduces the colors this TUI shipped with before theming
 // existed (plain ANSI names, so it renders correctly even on terminals
-// without truecolor support). Catppuccin Mocha and Dracula are two of the
-// most widely used terminal color schemes; both use truecolor hex values,
-// which Ink passes straight through to chalk.hex()/chalk.bgHex().
+// without truecolor support). The rest are some of the most widely used
+// terminal/editor color schemes, all truecolor hex, which Ink passes
+// straight through to chalk.hex()/chalk.bgHex().
 export const DEFAULT_THEMES: Theme[] = [
   {
     name: "Default",
@@ -77,6 +77,66 @@ export const DEFAULT_THEMES: Theme[] = [
       typeCommand: "#f1fa8c",
       selectionBg: "#bd93f9",
       selectionText: "#282a36",
+    },
+  },
+  {
+    name: "Nord",
+    colors: {
+      accent: "#88c0d0",
+      border: "#4c566a",
+      borderActive: "#88c0d0",
+      text: "#d8dee9",
+      success: "#a3be8c",
+      danger: "#bf616a",
+      typeApp: "#b48ead",
+      typeCommand: "#ebcb8b",
+      selectionBg: "#88c0d0",
+      selectionText: "#2e3440",
+    },
+  },
+  {
+    name: "Gruvbox Dark",
+    colors: {
+      accent: "#fe8019",
+      border: "#928374",
+      borderActive: "#fe8019",
+      text: "#ebdbb2",
+      success: "#b8bb26",
+      danger: "#fb4934",
+      typeApp: "#d3869b",
+      typeCommand: "#fabd2f",
+      selectionBg: "#fe8019",
+      selectionText: "#282828",
+    },
+  },
+  {
+    name: "Tokyo Night",
+    colors: {
+      accent: "#7aa2f7",
+      border: "#565f89",
+      borderActive: "#7aa2f7",
+      text: "#c0caf5",
+      success: "#9ece6a",
+      danger: "#f7768e",
+      typeApp: "#bb9af7",
+      typeCommand: "#e0af68",
+      selectionBg: "#7aa2f7",
+      selectionText: "#1a1b26",
+    },
+  },
+  {
+    name: "Solarized Dark",
+    colors: {
+      accent: "#268bd2",
+      border: "#586e75",
+      borderActive: "#268bd2",
+      text: "#839496",
+      success: "#859900",
+      danger: "#dc322f",
+      typeApp: "#d33682",
+      typeCommand: "#b58900",
+      selectionBg: "#268bd2",
+      selectionText: "#002b36",
     },
   },
 ];
