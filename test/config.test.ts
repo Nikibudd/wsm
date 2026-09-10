@@ -101,6 +101,8 @@ describe("config", () => {
     expect(getSettings({ workspaces: [] })).toEqual({
       defaultClose: true,
       autoPruneStaleSessions: false,
+      autocomplete: false,
+      autocompletePrompted: false,
     });
   });
 
@@ -108,13 +110,20 @@ describe("config", () => {
     expect(getSettings({ workspaces: [], settings: { autoPruneStaleSessions: true } })).toEqual({
       defaultClose: true,
       autoPruneStaleSessions: true,
+      autocomplete: false,
+      autocompletePrompted: false,
     });
   });
 
   test("saveConfig then loadConfig round-trips settings", () => {
     const original: Config = {
       workspaces: [],
-      settings: { defaultClose: false, autoPruneStaleSessions: true },
+      settings: {
+        defaultClose: false,
+        autoPruneStaleSessions: true,
+        autocomplete: true,
+        autocompletePrompted: true,
+      },
     };
     saveConfig(original);
     expect(loadConfig()).toEqual(original);

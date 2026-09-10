@@ -1,9 +1,12 @@
 import os from "node:os";
+import path from "node:path";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
 import { getSettings, loadConfig, saveConfig } from "../config.js";
-import { getConfigFile } from "../paths.js";
+import { getConfigFile, getRcFilePath } from "../paths.js";
+import { detectShell, installCompletion, uninstallCompletion } from "../completionInstall.js";
+import type { CompletionShell } from "../completionInstall.js";
 import { loadState } from "../state.js";
 import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
 import type { ThemeColors, ThemesFile } from "../theme.js";
@@ -23,7 +26,8 @@ type Overlay =
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
   | { kind: "confirmDeleteGroup"; groupName: string }
-  | { kind: "settings" };
+  | { kind: "settings" }
+  | { kind: "autocompletePrompt"; shell: CompletionShell };
 
 function displayPath(p: string): string {
   const home = os.homedir();
@@ -416,6 +420,9 @@ export function App() {
   const [previewThemeName, setPreviewThemeName] = useState<string | null>(null);
 
   const openNames = useMemo(() => new Set(loadState().sessions.map((s) => s.workspace)), []);
+  // $SHELL doesn't change during the app's lifetime, so this only needs
+  // computing once.
+  const shell = useMemo(() => detectShell(), []);
 
   const pendingSelect = useRef<PendingSelect | null>(null);
   const messageTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -434,6 +441,17 @@ export function App() {
   useEffect(() => {
     saveConfig(config);
   }, [config]);
+
+  // One-time prompt, first run only: only fires for a detected (bash/zsh)
+  // shell, and only until settings.autocompletePrompted is set — the
+  // ConfirmDialog's own onConfirm/onCancel below is what sets it, whichever
+  // way the user answers, so this effect never fires twice.
+  useEffect(() => {
+    if (shell && !getSettings(config).autocompletePrompted) {
+      setOverlay({ kind: "autocompletePrompt", shell });
+    }
+    // Mount-only: $SHELL/config are read once, at startup.
+  }, []);
 
   useEffect(() => {
     saveThemes(themesFile);
@@ -795,13 +813,19 @@ export function App() {
         />
       );
     } else if (overlay.kind === "settings") {
+      const previousSettings = getSettings(config);
       overlayNode = (
         <SettingsForm
-          existing={getSettings(config)}
+          existing={previousSettings}
           themeNames={themesFile.themes.map((t) => t.name)}
           activeTheme={themesFile.activeTheme}
+          completionAvailable={shell !== null}
           onPreviewTheme={setPreviewThemeName}
           onSubmit={({ settings, theme }) => {
+            if (shell && settings.autocomplete !== previousSettings.autocomplete) {
+              if (settings.autocomplete) installCompletion(shell);
+              else uninstallCompletion(shell);
+            }
             setConfig((prev) => ({ ...prev, settings }));
             setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
             setPreviewThemeName(null);
@@ -810,6 +834,30 @@ export function App() {
           }}
           onCancel={() => {
             setPreviewThemeName(null);
+            setOverlay(null);
+          }}
+        />
+      );
+    } else if (overlay.kind === "autocompletePrompt") {
+      const rcFileName = path.basename(getRcFilePath(overlay.shell));
+      overlayNode = (
+        <ConfirmDialog
+          title="Shell tab-completion"
+          message={`Enable wsm tab-completion for ${overlay.shell}? Adds one line to ${rcFileName} (once) that sources a file wsm manages and keeps up to date.`}
+          onConfirm={() => {
+            installCompletion(overlay.shell);
+            setConfig((prev) => ({
+              ...prev,
+              settings: { ...getSettings(prev), autocomplete: true, autocompletePrompted: true },
+            }));
+            setOverlay(null);
+            flash("Tab-completion installed — restart your shell to use it");
+          }}
+          onCancel={() => {
+            setConfig((prev) => ({
+              ...prev,
+              settings: { ...getSettings(prev), autocompletePrompted: true },
+            }));
             setOverlay(null);
           }}
         />

@@ -80,7 +80,7 @@ going forward.
 
 ```
 src/
-  paths.ts       config/state file locations, ~ expansion
+  paths.ts       config/state/log file locations, ~ expansion, path-segment sanitization
   types.ts       Config/Workspace/WorkspaceItem/Session/State shapes
   jsonFile.ts    shared safe-load/save-JSON-file contract, used by state.ts and theme.ts
   config.ts      load/save ~/.config/workspace-manager/config.yaml
@@ -88,6 +88,7 @@ src/
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
   cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
   completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
+  completionInstall.ts  installs/uninstalls the completion.ts scripts into the user's shell
   theme.ts       load/save ~/.config/workspace-manager/themes.json, built-in themes
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
@@ -107,13 +108,49 @@ in which case each item picks a `side`. Single-folder is always the default;
 Tool-wide behavior (as opposed to per-workspace config) lives in an optional
 top-level `settings:` key in the same `config.yaml` — not a separate file.
 `config.getSettings(config)` merges it with defaults (`defaultClose: true`,
-`autoPruneStaleSessions: false`) and is the only place that needs to know
+`autoPruneStaleSessions: false`, `autocomplete: false`,
+`autocompletePrompted: false`) and is the only place that needs to know
 those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
 than reading `config.settings` directly, so a missing/partial `settings:`
 key never needs an `undefined` check at the call site. Edited via the TUI's
 Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
 `Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
 cycled with ←→) for each boolean rather than introducing a new field kind.
+
+Shell tab-completion setup (`completionInstall.ts`) deliberately edits the
+user's rc file (`~/.zshrc`/`~/.bashrc`) *at most once, ever* — not the more
+common pattern of an `eval "$(tool init shell)"` line the user pastes in
+themselves, and not re-editing the rc file on every `wsm update`. Instead,
+`installCompletion(shell)` writes a small managed file under the config dir
+(`getCompletionScriptPath`, e.g. `completion.zsh`) whose only content is
+`eval "$(wsm completion <shell>)"`, then adds one marker-wrapped block to
+the rc file (`# >>> wsm completion >>> ... # <<< wsm completion <<<`) that
+sources *that file* — guarded by `[ -f ... ]` so a deleted config dir can't
+break shell startup. Because the rc line only ever sources a fixed path, the
+rc file never needs a second edit: `wsm completion <shell>` re-runs fresh
+every time a new shell starts (same "stays in sync automatically" property
+`completion.ts`'s scripts already have — see below), so nothing about the
+*content* wsm would want to change ever requires touching the rc file
+again. `installCompletion` is idempotent and safe to call on every `wsm
+update` (via `refreshInstalledCompletion`, gated on `settings.autocomplete`)
+and every time the TUI's Settings overlay saves with the field still on —
+it always rewrites the managed completion file (self-healing if deleted)
+but only touches the rc file the first time, detected via the marker.
+`uninstallCompletion` reverses both, restoring the rc file's surrounding
+content byte-for-byte (verified in `test/completionInstall.test.ts` by
+round-tripping install → uninstall against seeded rc content).
+
+The TUI prompts once, on first run, to opt in (`App.tsx`'s mount effect,
+gated on `settings.autocompletePrompted`) — a `ConfirmDialog`, not a
+`SettingsForm` field, since nothing has been configured yet to *put* in a
+settings screen. Whichever way the user answers, `autocompletePrompted` is
+set so it never asks again; the choice is also editable later from the
+Settings overlay (`SettingsForm`'s `completionAvailable` prop hides the
+field entirely when `detectShell()` returns null, since there'd be nothing
+to toggle). The prompt only fires for a detected shell (bash/zsh, same
+scope as `completion.ts`) — see `paths.ts`'s `getRcFilePath` for how that
+detection and the rc file path itself stay wsm/wsmdev-sandboxed, same
+reasoning as `getConfigDir` in the Lessons learned section below.
 
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
@@ -174,6 +211,22 @@ Muted/secondary text (`dimColor`) intentionally stays untethered to the
 theme — `dimColor` dims whatever the terminal's current foreground already
 is, so it looks correct under any theme without needing its own color role.
 
+`wsm open` captures every launched item's stdout+stderr to a per-item log
+file under `<configDir>/logs/` (`paths.ts`'s `getItemLogPath(workspaceName,
+itemName)`, one fixed, overwritten-not-accumulated file per (workspace,
+item) pair — `<sanitized-workspace>__<sanitized-item>.log`) and watches each
+item for `DEFAULT_OBSERVE_WINDOW_MS` (4s, hardcoded in `launcher.ts`, not a
+user setting) after spawn for an immediate non-zero exit, printing an error
+pointing at the log file if one happens. A fast *clean* exit (code 0, e.g.
+`open -a X .` handing off to the real app) and silence (still running when
+the window closes) are both expected outcomes, not failures — see
+`itemRunning`'s comment above for the same "dead launcher pid is normal for
+hand-off launches" reasoning this builds on. Since interactive-shell launch
+(`$SHELL -i -c ...`, see below) sources the user's rc files, a log can
+legitimately start with shell-startup noise (a `~/.zshrc` neofetch/fastfetch
+banner, etc.) before the actual command's output — don't mistake that for
+the log capture being broken.
+
 ## Lessons learned (don't regress these)
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not
@@ -183,6 +236,76 @@ is, so it looks correct under any theme without needing its own color role.
   "command not found." `-i` (interactive) is what makes the shell source rc
   files, matching what actually happens when a command is typed into a real
   terminal. See `test/launcher.test.ts` for the regression coverage.
+
+- **Per-item log capture uses OS-level fd redirection, not Node-side
+  piping — pass a real fd number as `stdio[1]`/`stdio[2]`, not `"pipe"` plus
+  manual `.on("data", ...)` plumbing.** `launchItem` does
+  `fs.openSync(logPath, "w")` and hands that fd straight to `spawn`'s
+  `stdio`, then `fs.closeSync`s its own copy immediately after — the child
+  has already duped it, so our copy is done being useful and holding it open
+  would leak an fd per launched item. This is genuinely free (no stream
+  backpressure, nothing to await, nothing that can throw in this process)
+  and was chosen over piping specifically because `wsm open` must stay fast.
+  A child's `"exit"` event on the `ChildProcess` object still fires
+  normally with fd-based stdio — that event is libuv process-lifecycle
+  tracking, unrelated to how stdout/stderr are wired — so launch-failure
+  detection (below) can listen for it exactly as if stdio were `"pipe"`.
+
+- **Launch-failure detection's 4-second observation window
+  (`DEFAULT_OBSERVE_WINDOW_MS` in `launcher.ts`) is deliberately overridable
+  only through a test-only setter (`__setObserveWindowMsForTesting`), not
+  Jest fake timers.** Fake timers don't mix cleanly with the real
+  `setTimeout` inside `observeExit` racing a mocked child's real
+  `EventEmitter.emit("exit", ...)` from a test — mocking `child_process`
+  already gives full control without needing to also fake the clock, and
+  fake-timers would have meant auditing all ~15 pre-existing
+  `openWorkspace`-calling tests for timer interactions they don't otherwise
+  care about. The setter defaults every test in `test/launcher.test.ts` to a
+  tiny window (15ms) in the shared `beforeEach`, with individual
+  failure-detection tests overriding it further (still small — 20–120ms,
+  never the real 4s) where the exact value matters (e.g. the concurrency
+  test needs a window wide enough to measure against).
+
+- **`test/launcher.test.ts`'s `node:child_process` mock must return a real
+  `EventEmitter` (`MockChildProcess`), not a plain `{ pid, unref }` object.**
+  Launch-failure detection listens for the spawned child's `"exit"` event
+  (`child.once("exit", ...)`), so tests need to simulate that by calling
+  `spawnedChildren[i].emit("exit", code)` on the mock. The trick for doing
+  this without fake timers or an artificial delay: `openWorkspace`'s body
+  runs entirely synchronously (no `await` is actually reached, since
+  `item.delayMs` is unset in these tests) right up until it awaits the
+  observation windows at the very end — calling but not yet awaiting it
+  (`const promise = launcher.openWorkspace(...)`) already runs that
+  synchronous prefix, including `spawn()` and attaching the `"exit"`
+  listener, before the test's next line executes. So the test can call
+  `.emit("exit", code)` synchronously right after the (unawaited) call and
+  before `await promise`, and the listener is guaranteed to already be
+  attached. Emitting `"exit"` *inside* the mock's `spawn` implementation
+  itself doesn't work — the listener isn't attached until *after* `spawn()`
+  returns, so a synchronous same-tick emit from inside the mock is missed;
+  it would need an async deferral like `setImmediate` instead, which this
+  synchronous-prefix trick avoids entirely.
+
+- **Observation windows are collected into an array and `Promise.all`'d
+  once, after the item-launch loop — never awaited per item inside the
+  loop.** Each window starts at spawn time (inside `launchItem`) and keeps
+  running while subsequent items are launched (and while any `delayMs`
+  pauses happen), so N items pay for roughly one window's worth of total
+  added latency, not N windows sequentially. Awaiting per item inside the
+  loop would silently turn `wsm open`'s added latency into
+  `4s * item count`, defeating the reason a hardcoded window (not a piped
+  synchronous wait) was chosen in the first place.
+
+- **Don't use a hand-rolled regex/blocklist for the log-path traversal
+  check — collapse to an allowlist instead.** `sanitizePathSegment` in
+  `paths.ts` replaces anything outside `[A-Za-z0-9._-]` (which includes every
+  `/`) with `_` first, then only needs to reject the now-`/`-free leftover
+  cases (empty, `"."`, `".."`) — it can never see an actual `/` to
+  special-case, so there's no way for a crafted name like `"../../etc"` to
+  survive as a real path separator. Rejecting `"."`/`".."` *after* the
+  replace (not before) matters: an input that only becomes `"."` or `".."`
+  post-sanitization (e.g. a name that's entirely unsafe characters padding
+  around real dots) still needs to be caught.
 
 - **Don't use `ink-text-input`.** It computes its next value from an
   `originalValue` *prop* rather than a functional state update. Ink can
@@ -242,6 +365,21 @@ is, so it looks correct under any theme without needing its own color role.
   contain and reports success, giving false confidence that a change works
   when it was never actually exercised. `wsmdev` is the only invocation that
   reflects the current `dist/cli.js` build.
+
+  **This same wsm/wsmdev split applies to the shell rc file, not just the
+  config dir.** `installCompletion`/`uninstallCompletion` (see Architecture
+  above) write to `~/.zshrc`/`~/.bashrc` — a file `getConfigDir`'s
+  sandboxing says nothing about, so without a matching guard, running the
+  TUI as `wsmdev` (the *mandated* way to manually verify changes, per the
+  point above) could edit the developer's own real shell config. `paths.ts`'s
+  `getRcFilePath` mirrors `getConfigDir` exactly: only the literal `"wsm"`
+  binary name resolves to the real home-dir rc file; `wsmdev`/anything else
+  falls back to a file under the (already-isolated) dev config dir, and
+  `WSM_RC_FILE` overrides both for tests (same role as `WSM_CONFIG_DIR`).
+  When manually verifying this feature specifically, that dev-sandboxed
+  fallback still isn't a *real* shell config nothing sources — set
+  `WSM_RC_FILE` explicitly to a scratch file to exercise the real
+  install/uninstall/source pipeline without risk either way.
 
 - **`loadConfig()`/`loadState()` must never throw** on a missing, empty, or
   malformed file — always fall back to the default shape. (`loadConfig` was
@@ -404,7 +542,16 @@ to CommonJS by Babel, or it breaks.
   drives it with raw keystrokes (`stdin.write("\x1b[C")` for arrows, `"\r"`
   for enter, etc.), then asserts on `lastFrame()` text and/or the persisted
   `config.yaml`. `await flush()` (a small `setTimeout`) between keystrokes
-  gives React a tick to commit before the next one.
+  gives React a tick to commit before the next one. The outer `describe`'s
+  `beforeEach` deletes `process.env.SHELL` — the one-time autocomplete-setup
+  `ConfirmDialog` (see Architecture above) only fires when a shell is
+  detected, and it appears *before* any other overlay on mount, so leaving
+  a real `$SHELL` set would silently swallow the first keystroke of every
+  other test in the file (routed to the prompt's y/n handler instead of
+  wherever the test meant it to go) rather than failing loudly. The
+  dedicated `"Autocomplete setup"` describe block re-sets `SHELL` (plus
+  `WSM_RC_FILE`, pointed at a scratch file — never the real rc file) in its
+  own `beforeEach` to actually exercise the prompt.
 
 Before `app.test.tsx` existed, TUI changes were verified with one-off Python
 scripts driving a real pseudo-terminal (`pty.openpty()` + raw keystroke

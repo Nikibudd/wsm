@@ -43,6 +43,10 @@ export interface Settings {
   defaultClose?: boolean;
   /** Whether `wsm status` automatically drops session items whose tracked pid is no longer running, instead of just flagging them. Default: false. */
   autoPruneStaleSessions?: boolean;
+  /** Whether wsm has installed shell tab-completion (one rc-file line, plus a completion file wsm manages under the config dir). Default: false. */
+  autocomplete?: boolean;
+  /** Whether the TUI has already asked once whether to set up autocompletion, so it only ever asks once. Default: false. */
+  autocompletePrompted?: boolean;
 }
 
 export interface Config {
@@ -56,6 +60,8 @@ export interface SessionItem {
   pid?: number;
   close?: string;
   cwd?: string;
+  /** Path to this item's captured stdout+stderr log, if launch-failure detection wrote one. */
+  logPath?: string;
 }
 
 export interface Session {

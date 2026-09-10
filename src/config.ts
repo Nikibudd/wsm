@@ -41,6 +41,8 @@ export function workspaceNames(config: Config): string[] {
 const DEFAULT_SETTINGS: Required<Settings> = {
   defaultClose: true,
   autoPruneStaleSessions: false,
+  autocomplete: false,
+  autocompletePrompted: false,
 };
 
 export function getSettings(config: Config): Required<Settings> {

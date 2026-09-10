@@ -8,15 +8,24 @@ import {
   getStateFile,
   getThemesFile,
   ensureConfigDir,
+  getLogsDir,
+  getItemLogPath,
+  ensureLogsDir,
+  sanitizePathSegment,
+  getCompletionScriptPath,
+  getRcFilePath,
 } from "../src/paths.js";
 
 describe("paths", () => {
   const previousEnv = process.env.WSM_CONFIG_DIR;
+  const previousRcEnv = process.env.WSM_RC_FILE;
   const previousArgv1 = process.argv[1];
 
   afterEach(() => {
     if (previousEnv === undefined) delete process.env.WSM_CONFIG_DIR;
     else process.env.WSM_CONFIG_DIR = previousEnv;
+    if (previousRcEnv === undefined) delete process.env.WSM_RC_FILE;
+    else process.env.WSM_RC_FILE = previousRcEnv;
     process.argv[1] = previousArgv1;
   });
 
@@ -73,5 +82,103 @@ describe("paths", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  describe("sanitizePathSegment", () => {
+    test("leaves an already-safe name unchanged", () => {
+      expect(sanitizePathSegment("demo")).toBe("demo");
+      expect(sanitizePathSegment("my-workspace_2")).toBe("my-workspace_2");
+    });
+
+    test("replaces unsafe characters (including spaces) with underscores", () => {
+      expect(sanitizePathSegment("My Workspace!")).toBe("My_Workspace_");
+    });
+
+    test("collapses embedded slashes so the result can never traverse directories", () => {
+      const result = sanitizePathSegment("../../etc");
+      expect(result).not.toContain("/");
+      expect(result).not.toBe("..");
+    });
+
+    test("rejects empty, '.', and '..' results", () => {
+      expect(() => sanitizePathSegment("")).toThrow();
+      expect(() => sanitizePathSegment("   ")).toThrow();
+      expect(() => sanitizePathSegment(".")).toThrow();
+      expect(() => sanitizePathSegment("..")).toThrow();
+    });
+  });
+
+  describe("log paths", () => {
+    test("getLogsDir is a 'logs' subdirectory of the config dir", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      expect(getLogsDir()).toBe(path.join("/tmp/wsm-logs-test", "logs"));
+    });
+
+    test("getItemLogPath builds one sanitized, non-accumulating path per (workspace, item)", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      expect(getItemLogPath("demo", "editor")).toBe(
+        path.join("/tmp/wsm-logs-test", "logs", "demo__editor.log"),
+      );
+      expect(getItemLogPath("My Workspace", "My Item!")).toBe(
+        path.join("/tmp/wsm-logs-test", "logs", "My_Workspace__My_Item_.log"),
+      );
+    });
+
+    test("getItemLogPath never escapes the logs directory, even for traversal-shaped names", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      const logPath = getItemLogPath("../evil", "../../etc/passwd");
+      expect(path.dirname(logPath)).toBe(getLogsDir());
+    });
+
+    test("ensureLogsDir creates the logs directory if missing", () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wsm-paths-test-"));
+      try {
+        process.env.WSM_CONFIG_DIR = tmp;
+        const logsDir = path.join(tmp, "logs");
+        expect(fs.existsSync(logsDir)).toBe(false);
+        ensureLogsDir();
+        expect(fs.existsSync(logsDir)).toBe(true);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("getCompletionScriptPath", () => {
+    test("is a shell-specific file under the config dir", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-completion-test";
+      expect(getCompletionScriptPath("zsh")).toBe(path.join("/tmp/wsm-completion-test", "completion.zsh"));
+      expect(getCompletionScriptPath("bash")).toBe(path.join("/tmp/wsm-completion-test", "completion.bash"));
+    });
+  });
+
+  describe("getRcFilePath", () => {
+    test("WSM_RC_FILE overrides the default rc file location, read live", () => {
+      process.env.WSM_RC_FILE = "~/custom-rc";
+      expect(getRcFilePath("zsh")).toBe(path.join(os.homedir(), "custom-rc"));
+      process.env.WSM_RC_FILE = "/tmp/other-rc";
+      expect(getRcFilePath("zsh")).toBe("/tmp/other-rc");
+    });
+
+    test("without WSM_RC_FILE, invoked as the real `wsm` binary, defaults to ~/.zshrc or ~/.bashrc", () => {
+      delete process.env.WSM_RC_FILE;
+      process.argv[1] = "/opt/homebrew/bin/wsm";
+      expect(getRcFilePath("zsh")).toBe(path.join(os.homedir(), ".zshrc"));
+      expect(getRcFilePath("bash")).toBe(path.join(os.homedir(), ".bashrc"));
+    });
+
+    // Same reasoning as getConfigDir's wsm/wsmdev split: a dev/test build
+    // must never be able to touch the developer's real shell rc file just
+    // because WSM_RC_FILE wasn't set. Route it into the (already-isolated)
+    // dev config dir instead.
+    test("without WSM_RC_FILE, invoked as anything other than exactly `wsm`, never resolves to the real home-dir rc file", () => {
+      delete process.env.WSM_RC_FILE;
+      delete process.env.WSM_CONFIG_DIR;
+      for (const invokedAs of ["/opt/homebrew/bin/wsmdev", "/some/path/dist/cli.js", "/repo/src/cli.ts"]) {
+        process.argv[1] = invokedAs;
+        expect(getRcFilePath("zsh")).not.toBe(path.join(os.homedir(), ".zshrc"));
+        expect(getRcFilePath("zsh")).toBe(path.join(getConfigDir(), "dev-rc.zsh"));
+      }
+    });
   });
 });
