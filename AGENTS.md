@@ -88,6 +88,7 @@ src/
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
   cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
   completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
+  completionInstall.ts  installs/uninstalls the completion.ts scripts into the user's shell
   theme.ts       load/save ~/.config/workspace-manager/themes.json, built-in themes
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
@@ -107,13 +108,49 @@ in which case each item picks a `side`. Single-folder is always the default;
 Tool-wide behavior (as opposed to per-workspace config) lives in an optional
 top-level `settings:` key in the same `config.yaml` — not a separate file.
 `config.getSettings(config)` merges it with defaults (`defaultClose: true`,
-`autoPruneStaleSessions: false`) and is the only place that needs to know
+`autoPruneStaleSessions: false`, `autocomplete: false`,
+`autocompletePrompted: false`) and is the only place that needs to know
 those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
 than reading `config.settings` directly, so a missing/partial `settings:`
 key never needs an `undefined` check at the call site. Edited via the TUI's
 Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
 `Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
 cycled with ←→) for each boolean rather than introducing a new field kind.
+
+Shell tab-completion setup (`completionInstall.ts`) deliberately edits the
+user's rc file (`~/.zshrc`/`~/.bashrc`) *at most once, ever* — not the more
+common pattern of an `eval "$(tool init shell)"` line the user pastes in
+themselves, and not re-editing the rc file on every `wsm update`. Instead,
+`installCompletion(shell)` writes a small managed file under the config dir
+(`getCompletionScriptPath`, e.g. `completion.zsh`) whose only content is
+`eval "$(wsm completion <shell>)"`, then adds one marker-wrapped block to
+the rc file (`# >>> wsm completion >>> ... # <<< wsm completion <<<`) that
+sources *that file* — guarded by `[ -f ... ]` so a deleted config dir can't
+break shell startup. Because the rc line only ever sources a fixed path, the
+rc file never needs a second edit: `wsm completion <shell>` re-runs fresh
+every time a new shell starts (same "stays in sync automatically" property
+`completion.ts`'s scripts already have — see below), so nothing about the
+*content* wsm would want to change ever requires touching the rc file
+again. `installCompletion` is idempotent and safe to call on every `wsm
+update` (via `refreshInstalledCompletion`, gated on `settings.autocomplete`)
+and every time the TUI's Settings overlay saves with the field still on —
+it always rewrites the managed completion file (self-healing if deleted)
+but only touches the rc file the first time, detected via the marker.
+`uninstallCompletion` reverses both, restoring the rc file's surrounding
+content byte-for-byte (verified in `test/completionInstall.test.ts` by
+round-tripping install → uninstall against seeded rc content).
+
+The TUI prompts once, on first run, to opt in (`App.tsx`'s mount effect,
+gated on `settings.autocompletePrompted`) — a `ConfirmDialog`, not a
+`SettingsForm` field, since nothing has been configured yet to *put* in a
+settings screen. Whichever way the user answers, `autocompletePrompted` is
+set so it never asks again; the choice is also editable later from the
+Settings overlay (`SettingsForm`'s `completionAvailable` prop hides the
+field entirely when `detectShell()` returns null, since there'd be nothing
+to toggle). The prompt only fires for a detected shell (bash/zsh, same
+scope as `completion.ts`) — see `paths.ts`'s `getRcFilePath` for how that
+detection and the rc file path itself stay wsm/wsmdev-sandboxed, same
+reasoning as `getConfigDir` in the Lessons learned section below.
 
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
@@ -329,6 +366,21 @@ the log capture being broken.
   when it was never actually exercised. `wsmdev` is the only invocation that
   reflects the current `dist/cli.js` build.
 
+  **This same wsm/wsmdev split applies to the shell rc file, not just the
+  config dir.** `installCompletion`/`uninstallCompletion` (see Architecture
+  above) write to `~/.zshrc`/`~/.bashrc` — a file `getConfigDir`'s
+  sandboxing says nothing about, so without a matching guard, running the
+  TUI as `wsmdev` (the *mandated* way to manually verify changes, per the
+  point above) could edit the developer's own real shell config. `paths.ts`'s
+  `getRcFilePath` mirrors `getConfigDir` exactly: only the literal `"wsm"`
+  binary name resolves to the real home-dir rc file; `wsmdev`/anything else
+  falls back to a file under the (already-isolated) dev config dir, and
+  `WSM_RC_FILE` overrides both for tests (same role as `WSM_CONFIG_DIR`).
+  When manually verifying this feature specifically, that dev-sandboxed
+  fallback still isn't a *real* shell config nothing sources — set
+  `WSM_RC_FILE` explicitly to a scratch file to exercise the real
+  install/uninstall/source pipeline without risk either way.
+
 - **`loadConfig()`/`loadState()` must never throw** on a missing, empty, or
   malformed file — always fall back to the default shape. (`loadConfig` was
   missing this for a while; `loadState` had it from the start. Keep them
@@ -490,7 +542,16 @@ to CommonJS by Babel, or it breaks.
   drives it with raw keystrokes (`stdin.write("\x1b[C")` for arrows, `"\r"`
   for enter, etc.), then asserts on `lastFrame()` text and/or the persisted
   `config.yaml`. `await flush()` (a small `setTimeout`) between keystrokes
-  gives React a tick to commit before the next one.
+  gives React a tick to commit before the next one. The outer `describe`'s
+  `beforeEach` deletes `process.env.SHELL` — the one-time autocomplete-setup
+  `ConfirmDialog` (see Architecture above) only fires when a shell is
+  detected, and it appears *before* any other overlay on mount, so leaving
+  a real `$SHELL` set would silently swallow the first keystroke of every
+  other test in the file (routed to the prompt's y/n handler instead of
+  wherever the test meant it to go) rather than failing loudly. The
+  dedicated `"Autocomplete setup"` describe block re-sets `SHELL` (plus
+  `WSM_RC_FILE`, pointed at a scratch file — never the real rc file) in its
+  own `beforeEach` to actually exercise the prompt.
 
 Before `app.test.tsx` existed, TUI changes were verified with one-off Python
 scripts driving a real pseudo-terminal (`pty.openpty()` + raw keystroke

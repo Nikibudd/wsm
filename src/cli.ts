@@ -5,6 +5,7 @@ import { loadConfig, workspaceNames, getSettings } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
 import { bashCompletionScript, zshCompletionScript } from "./completion.js";
+import { refreshInstalledCompletion } from "./completionInstall.js";
 import { fetchLatestRelease, downloadAsset, canSelfUpdate, installUpdate } from "./update.js";
 // Real ESM JSON import, not a hardcoded version string — this also has to
 // work standalone-bundled (release/wsm.mjs ships with no package.json next
@@ -128,6 +129,7 @@ program
       console.log(`Downloading v${latest.version}...`);
       const data = await downloadAsset(latest.downloadUrl);
       installUpdate(process.argv[1]!, data);
+      refreshInstalledCompletion(getSettings(loadConfig()).autocomplete);
       console.log(`Updated to v${latest.version}.`);
     } catch (err) {
       console.error((err as Error).message);

@@ -80,3 +80,30 @@ export function getItemLogPath(workspaceName: string, itemName: string): string 
   const item = sanitizePathSegment(itemName);
   return path.join(getLogsDir(), `${ws}__${item}.log`);
 }
+
+export type CompletionShell = "bash" | "zsh";
+
+// The managed completion script wsm writes and keeps up to date — never
+// hand-edited by the user. Lives under the config dir so it already gets
+// the wsm/wsmdev sandboxing above for free.
+export function getCompletionScriptPath(shell: CompletionShell): string {
+  return path.join(getConfigDir(), `completion.${shell}`);
+}
+
+// WSM_RC_FILE overrides which rc file installCompletion touches — used for
+// isolated testing, same purpose as WSM_CONFIG_DIR. Read live, same reason.
+//
+// Below that override, only the literal "wsm" binary name resolves to the
+// user's real ~/.zshrc or ~/.bashrc. Anything else falls back to a file
+// under the (already-isolated) dev config dir — mirrors getConfigDir's
+// wsm/wsmdev split exactly: a dev/test build must never be able to touch
+// the developer's real shell rc file just because WSM_RC_FILE wasn't set.
+export function getRcFilePath(shell: CompletionShell): string {
+  const override = process.env.WSM_RC_FILE;
+  if (override) return expandHome(override);
+  const filename = shell === "zsh" ? ".zshrc" : ".bashrc";
+  if (invokedCommandName() === "wsm") {
+    return path.join(os.homedir(), filename);
+  }
+  return path.join(getConfigDir(), `dev-rc.${shell}`);
+}
