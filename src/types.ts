@@ -56,6 +56,8 @@ export interface SessionItem {
   pid?: number;
   close?: string;
   cwd?: string;
+  /** Path to this item's captured stdout+stderr log, if launch-failure detection wrote one. */
+  logPath?: string;
 }
 
 export interface Session {

@@ -1,4 +1,5 @@
 import { jest } from "@jest/globals";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,18 @@ import type { Config, Session } from "../src/types.js";
 const spawnMock = jest.fn();
 const spawnSyncMock = jest.fn();
 
+// A real EventEmitter (not a plain { pid, unref } object) so tests can
+// simulate a launched process exiting via `.emit("exit", code)` — needed to
+// test launch-failure detection, which listens for the child's "exit" event.
+class MockChildProcess extends EventEmitter {
+  pid: number;
+  unref = jest.fn();
+  constructor(pid: number) {
+    super();
+    this.pid = pid;
+  }
+}
+
 jest.unstable_mockModule("node:child_process", () => ({
   spawn: spawnMock,
   spawnSync: spawnSyncMock,
@@ -19,21 +32,33 @@ jest.unstable_mockModule("node:child_process", () => ({
 const launcher = await import("../src/launcher.js");
 const configModule = await import("../src/config.js");
 const stateModule = await import("../src/state.js");
+const pathsModule = await import("../src/paths.js");
 
 describe("launcher", () => {
   let tmpDir: string;
   const previousEnv = process.env.WSM_CONFIG_DIR;
   let pidCounter: number;
   let killSpy: jest.SpiedFunction<typeof process.kill>;
+  let spawnedChildren: MockChildProcess[];
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wsm-launcher-test-"));
     process.env.WSM_CONFIG_DIR = tmpDir;
 
     pidCounter = 1000;
-    spawnMock.mockReset().mockImplementation(() => ({ pid: pidCounter++, unref: jest.fn() }));
+    spawnedChildren = [];
+    spawnMock.mockReset().mockImplementation(() => {
+      const child = new MockChildProcess(pidCounter++);
+      spawnedChildren.push(child);
+      return child;
+    });
     spawnSyncMock.mockReset().mockImplementation(() => ({ status: 0 }));
     killSpy = jest.spyOn(process, "kill").mockImplementation(() => true);
+    // Real (short) timers, not Jest fake timers — see launcher.test.ts's
+    // failure-detection describe block for why. Keep this tiny so the ~15
+    // pre-existing tests that never emit "exit" don't each pay the real
+    // observation-window latency.
+    launcher.__setObserveWindowMsForTesting(15);
   });
 
   afterEach(() => {
@@ -62,7 +87,9 @@ describe("launcher", () => {
     expect(args).toEqual(["-i", "-c", "code ."]);
     expect(options.cwd).toBe("/tmp/demo");
     expect(options.detached).toBe(true);
-    expect(options.stdio).toBe("ignore");
+    // stdin is still ignored; stdout/stderr are redirected to a log file via
+    // fd stdio (see the "per-item log capture" describe block below).
+    expect(options.stdio[0]).toBe("ignore");
   });
 
   test("resolves cwd with priority: item.cwd > split side dir > workspace cwd", async () => {
@@ -402,5 +429,144 @@ describe("launcher", () => {
 
     const remaining = stateModule.loadState().sessions.map((s) => s.workspace);
     expect(remaining).toEqual(["a"]);
+  });
+
+  describe("per-item log capture", () => {
+    test("redirects the child's stdout+stderr to a per-item log file via fd stdio, not Node-side piping", async () => {
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "editor", type: "app", launch: "code ." }] }],
+      });
+
+      await launcher.openWorkspace("demo", {});
+
+      const [, , options] = spawnMock.mock.calls[0] as [string, string[], any];
+      expect(Array.isArray(options.stdio)).toBe(true);
+      expect(options.stdio[0]).toBe("ignore");
+      expect(typeof options.stdio[1]).toBe("number");
+      expect(options.stdio[2]).toBe(options.stdio[1]); // stdout and stderr share one fd/log file
+
+      const expectedLogPath = pathsModule.getItemLogPath("demo", "editor");
+      expect(fs.existsSync(expectedLogPath)).toBe(true);
+    });
+
+    test("records the log path on the session item", async () => {
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "editor", type: "app", launch: "code ." }] }],
+      });
+
+      await launcher.openWorkspace("demo", {});
+
+      const state = stateModule.loadState();
+      expect(state.sessions[0]!.items[0]!.logPath).toBe(pathsModule.getItemLogPath("demo", "editor"));
+    });
+
+    test("overwrites the log file on each relaunch instead of accumulating", async () => {
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "editor", type: "app", launch: "code ." }] }],
+      });
+      const logPath = pathsModule.getItemLogPath("demo", "editor");
+
+      await launcher.openWorkspace("demo", { close: false });
+      fs.appendFileSync(logPath, "leftover output from a previous run\n");
+      expect(fs.readFileSync(logPath, "utf8")).not.toBe("");
+
+      await launcher.openWorkspace("demo", { close: false });
+
+      expect(fs.readFileSync(logPath, "utf8")).toBe("");
+    });
+
+    test("sanitizes workspace/item names so the log path can't escape the logs directory", async () => {
+      seedConfig({
+        workspaces: [{ name: "../evil", items: [{ name: "../../etc/passwd", type: "command", launch: "true" }] }],
+      });
+
+      await launcher.openWorkspace("../evil", {});
+
+      const state = stateModule.loadState();
+      const logPath = state.sessions[0]!.items[0]!.logPath!;
+      expect(path.dirname(logPath)).toBe(pathsModule.getLogsDir());
+      expect(fs.existsSync(logPath)).toBe(true);
+    });
+  });
+
+  describe("launch-failure detection", () => {
+    let errorSpy: jest.SpiedFunction<typeof console.error>;
+
+    beforeEach(() => {
+      errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      errorSpy.mockRestore();
+    });
+
+    // openWorkspace's body runs synchronously (no `await` is reached) right
+    // up until it awaits the observation windows at the very end — so by
+    // the time the call below returns a pending promise, `spawn` has
+    // already run and launcher's "exit" listener is already attached. That
+    // lets the test emit "exit" itself instead of needing fake timers or a
+    // real 4-second wait.
+    test("prints an error pointing at the log file when an item exits non-zero within the observation window", async () => {
+      launcher.__setObserveWindowMsForTesting(50);
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "broken", type: "command", launch: "false" }] }],
+      });
+
+      const promise = launcher.openWorkspace("demo", {});
+      expect(spawnedChildren).toHaveLength(1);
+      spawnedChildren[0]!.emit("exit", 1, null);
+      await promise;
+
+      const logPath = pathsModule.getItemLogPath("demo", "broken");
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("broken"));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(logPath));
+    });
+
+    test("does not flag a fast clean exit (code 0) — the common hand-off case for `open -a X .` / `docker run -d`", async () => {
+      launcher.__setObserveWindowMsForTesting(50);
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "handoff", type: "app", launch: "open -a X ." }] }],
+      });
+
+      const promise = launcher.openWorkspace("demo", {});
+      spawnedChildren[0]!.emit("exit", 0, null);
+      await promise;
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test("does not flag an item still running when the observation window closes (silence is not failure)", async () => {
+      launcher.__setObserveWindowMsForTesting(20);
+      seedConfig({
+        workspaces: [{ name: "demo", items: [{ name: "server", type: "command", launch: "sleep 300" }] }],
+      });
+
+      await launcher.openWorkspace("demo", {}); // no "exit" ever emitted
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    test("observation windows run concurrently across items, so total latency doesn't scale with item count", async () => {
+      launcher.__setObserveWindowMsForTesting(120);
+      seedConfig({
+        workspaces: [
+          {
+            name: "demo",
+            items: [
+              { name: "a", type: "command", launch: "sleep 300" },
+              { name: "b", type: "command", launch: "sleep 300" },
+              { name: "c", type: "command", launch: "sleep 300" },
+            ],
+          },
+        ],
+      });
+
+      const start = Date.now();
+      await launcher.openWorkspace("demo", {}); // none exit; each waits out its own window
+      const elapsed = Date.now() - start;
+
+      // Sequential would be >= 3 * 120ms; concurrent should land close to one window.
+      expect(elapsed).toBeLessThan(3 * 120);
+    });
   });
 });

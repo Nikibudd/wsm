@@ -8,6 +8,10 @@ import {
   getStateFile,
   getThemesFile,
   ensureConfigDir,
+  getLogsDir,
+  getItemLogPath,
+  ensureLogsDir,
+  sanitizePathSegment,
 } from "../src/paths.js";
 
 describe("paths", () => {
@@ -73,5 +77,65 @@ describe("paths", () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  describe("sanitizePathSegment", () => {
+    test("leaves an already-safe name unchanged", () => {
+      expect(sanitizePathSegment("demo")).toBe("demo");
+      expect(sanitizePathSegment("my-workspace_2")).toBe("my-workspace_2");
+    });
+
+    test("replaces unsafe characters (including spaces) with underscores", () => {
+      expect(sanitizePathSegment("My Workspace!")).toBe("My_Workspace_");
+    });
+
+    test("collapses embedded slashes so the result can never traverse directories", () => {
+      const result = sanitizePathSegment("../../etc");
+      expect(result).not.toContain("/");
+      expect(result).not.toBe("..");
+    });
+
+    test("rejects empty, '.', and '..' results", () => {
+      expect(() => sanitizePathSegment("")).toThrow();
+      expect(() => sanitizePathSegment("   ")).toThrow();
+      expect(() => sanitizePathSegment(".")).toThrow();
+      expect(() => sanitizePathSegment("..")).toThrow();
+    });
+  });
+
+  describe("log paths", () => {
+    test("getLogsDir is a 'logs' subdirectory of the config dir", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      expect(getLogsDir()).toBe(path.join("/tmp/wsm-logs-test", "logs"));
+    });
+
+    test("getItemLogPath builds one sanitized, non-accumulating path per (workspace, item)", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      expect(getItemLogPath("demo", "editor")).toBe(
+        path.join("/tmp/wsm-logs-test", "logs", "demo__editor.log"),
+      );
+      expect(getItemLogPath("My Workspace", "My Item!")).toBe(
+        path.join("/tmp/wsm-logs-test", "logs", "My_Workspace__My_Item_.log"),
+      );
+    });
+
+    test("getItemLogPath never escapes the logs directory, even for traversal-shaped names", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-logs-test";
+      const logPath = getItemLogPath("../evil", "../../etc/passwd");
+      expect(path.dirname(logPath)).toBe(getLogsDir());
+    });
+
+    test("ensureLogsDir creates the logs directory if missing", () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wsm-paths-test-"));
+      try {
+        process.env.WSM_CONFIG_DIR = tmp;
+        const logsDir = path.join(tmp, "logs");
+        expect(fs.existsSync(logsDir)).toBe(false);
+        ensureLogsDir();
+        expect(fs.existsSync(logsDir)).toBe(true);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
   });
 });
