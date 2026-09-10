@@ -248,17 +248,18 @@ is, so it looks correct under any theme without needing its own color role.
   missing this for a while; `loadState` had it from the start. Keep them
   consistent.)
 
-- **An item's close method is one of three, in strict priority order —
-  `close` (explicit command) > `closeAppName` (AppleScript quit) > killing
-  the tracked pid — never a combination.** `closeSessionItem` in
-  `launcher.ts` checks `close` first and returns immediately if it's set, so
-  setting both `close` and `closeAppName` on the same item silently drops
-  `closeAppName` with no warning. Real mistake made configuring a user
-  workspace: added a bogus `close: "quit intellij"` (not a real shell
-  command) alongside a correct `closeAppName: "IntelliJ IDEA"` — the bogus
-  command would have run instead of the working AppleScript quit. If you
-  ever add UI/validation around item close config, flag this combination
-  rather than silently honoring the priority order.
+- **An item's close method is one of two, in strict priority order — `close`
+  (explicit command) > killing the tracked pid.** `closeSessionItem` in
+  `launcher.ts` checks `close` first and returns immediately if it's set.
+  There used to be a third, macOS-only tier (`closeAppName`, an AppleScript
+  `tell application "X" to quit`) — removed deliberately, in favor of macOS
+  and Linux only, no OS-specific built-in mechanisms: anyone who wants
+  "quit this app by name" now writes their own `close` command (e.g.
+  `osascript -e '...'` on macOS, `pkill -x "X"` on Linux — see README's
+  Notes). Don't reintroduce a platform-specific close mechanism as a first-
+  class config field; if `wsm` ever needs to help with this again, it
+  should be by generalizing what a `close` command *can* do, not by adding
+  another OS-specific built-in string field like `closeAppName` was.
 
 - **The globally-linked `wsmdev` runs compiled `dist/cli.js`, not `src/`.**
   Editing source has zero effect on `wsmdev` until `npm run build`
@@ -287,17 +288,17 @@ is, so it looks correct under any theme without needing its own color role.
   deleted session records for still-running items** on every `wsm status`.
   Fixed via `launcher.ts`'s `itemRunning(item): boolean | null`, which
   picks the check by how the item is configured to close (mirrors the
-  existing close-priority order in spirit, not by coincidence):
-  - `closeAppName` set → `tell application "X" to running` (same app name
-    already used to quit it via `tell application "X" to quit` — consistent
-    with existing close logic, not a new naming convention to keep in sync).
+  close-priority order in spirit, not by coincidence):
   - `close` set (arbitrary custom command, e.g. `docker stop ...`) → no
     generic way to verify, so **unknown** (`null`) rather than guessed —
     never flagged as stale, never auto-pruned. Guessing wrong here is worse
     than not knowing: false "not running" erodes trust in the whole
     feature, silent auto-prune loses track of something still open.
-  - neither set → the fallback close mechanism kills `item.pid` directly,
-    so that pid's own liveness is accurate and meaningful — no change here.
+  - unset → the fallback close mechanism kills `item.pid` directly, so
+    that pid's own liveness is accurate and meaningful — no change here.
+  (This used to have a third branch — `closeAppName` set → `tell
+  application "X" to running` — removed along with `closeAppName` itself;
+  see the close-method lesson above.)
   If you add a new close mechanism, give `itemRunning` a matching branch
   rather than falling through to the raw pid check, which produces this
   exact false-positive class for anything that isn't a foreground process

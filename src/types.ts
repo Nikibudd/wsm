@@ -17,8 +17,6 @@ export interface WorkspaceItem {
   side?: ItemSide;
   /** Optional shell command run instead of killing the process when closing. */
   close?: string;
-  /** Optional macOS application name to `quit` via AppleScript when closing. */
-  closeAppName?: string;
   /** Optional pause (ms) after launching before starting the next item. */
   delayMs?: number;
 }
@@ -57,7 +55,6 @@ export interface SessionItem {
   type: ItemType;
   pid?: number;
   close?: string;
-  closeAppName?: string;
   cwd?: string;
 }
 

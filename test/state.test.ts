@@ -37,7 +37,7 @@ describe("state", () => {
           workspace: "demo",
           openedAt: "2026-01-01T00:00:00.000Z",
           items: [
-            { name: "editor", type: "app", pid: 123, closeAppName: "Visual Studio Code" },
+            { name: "editor", type: "app", pid: 123 },
             { name: "docker", type: "command", pid: 456, close: "docker compose down", cwd: "/tmp" },
           ],
         },
