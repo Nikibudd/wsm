@@ -7,7 +7,29 @@ down automatically as the new one opens.
 
 ## Install
 
-### From a release
+### Quick install (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nikibudd/wsm/main/install.sh | bash
+```
+
+Same command whether you're running it from bash or zsh — it always runs
+the script through `bash`, regardless of which shell you typed it into, so
+there's nothing shell-specific to pick between. It downloads the latest
+release, installs it to `~/.local/bin/wsm` (override with
+`WSM_INSTALL_DIR=... `), and tells you if that directory isn't on your
+`PATH` yet.
+
+Piping a remote script into a shell is worth being able to inspect first —
+download and read it before running if you'd rather not take that on faith:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nikibudd/wsm/main/install.sh -o install.sh
+less install.sh   # read it
+bash install.sh
+```
+
+### From a release (manual)
 
 Download `wsm.mjs` from the [Releases page](https://github.com/Nikibudd/wsm/releases) — it's a single
 self-contained file (all dependencies bundled in), the only requirement is

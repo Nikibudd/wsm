@@ -668,3 +668,42 @@ symlink and silently overwrite a tracked source file in the repo with a
 downloaded release binary. The two checks (name, then not-a-symlink) are
 both necessary — name alone doesn't catch a hypothetical `wsm` symlink, and
 symlink-check alone doesn't catch `wsmdev`'s different name.
+
+## `install.sh`
+
+Root-level bash script, curl-piped per the README's "Quick install"
+(`curl -fsSL .../install.sh | bash`) — the one-time bootstrap for a *first*
+install; `wsm update` (`src/update.ts`) is what takes over after that, and
+can't be what installs itself. It deliberately duplicates (in bash, small
+and rarely-changing) the same "fetch latest release via GitHub's
+unauthenticated API, find the `wsm.mjs` asset, atomic-download-then-rename
+into place" logic `update.ts` already has, rather than sharing code across
+languages — there's no TS/bash bridge worth building for this. Served
+straight from `raw.githubusercontent.com/Nikibudd/wsm/main/install.sh`, not
+GitHub Pages — deliberately: Pages would only buy a shorter URL, at the
+cost of a new repo-settings surface (enabling it) and a `.nojekyll` gotcha
+(Pages runs content through Jekyll by default, which can mangle a raw
+script), for zero functional benefit over a URL that already works with no
+setup and updates the instant something's pushed to `main`.
+
+**One command works from both bash and zsh — don't be tempted to add a
+second, shell-specific one "to match."** `curl -fsSL <url> | bash` always
+runs the downloaded script through `bash` regardless of which shell you
+typed the command into; there is nothing in it for zsh to do differently.
+(This is a different situation from `wsm completion <shell>` genuinely
+needing separate bash/zsh outputs — those really do differ; this doesn't.)
+
+**No Jest test file** — same reasoning as `cli.ts` having none, but for a
+different root cause: this is a bash script hitting live GitHub
+infrastructure (release API + asset download), not TypeScript, so it's
+outside this project's Jest/`jest.unstable_mockModule` setup entirely.
+Verified instead by actually running it against the real GitHub API into a
+scratch directory (`WSM_INSTALL_DIR=<scratch> bash install.sh`, then
+checking the file exists, is executable, and `<scratch>/wsm --version`
+reports the current release version) — both as a direct invocation and
+piped through stdin (`cat install.sh | bash`), since piping consumes
+stdin and the script must not depend on reading from a real terminal (it
+doesn't — no interactive prompts, on purpose, precisely so `| bash` is
+safe). Same "verify against live infrastructure, not a mock" approach
+`update.ts`'s real fetch → download → atomic-install pipeline got — see
+above.
