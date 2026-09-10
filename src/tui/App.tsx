@@ -236,11 +236,7 @@ function WorkspaceListPane({
 function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean }) {
   const theme = useTheme();
   const typeColor = item.type === "app" ? theme.typeApp : theme.typeCommand;
-  const closeLabel = item.closeAppName
-    ? `quit "${item.closeAppName}"`
-    : item.close
-      ? `run "${item.close}"`
-      : "kill process";
+  const closeLabel = item.close ? `run "${item.close}"` : "kill process";
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text {...rowStyle(selected, theme)}>

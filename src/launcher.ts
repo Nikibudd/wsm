@@ -41,7 +41,6 @@ function launchItem(workspace: Workspace, item: WorkspaceItem): SessionItem {
     type: item.type,
     pid: child.pid,
     close: item.close,
-    closeAppName: item.closeAppName,
     cwd,
   };
 }
@@ -51,11 +50,6 @@ function closeSessionItem(item: SessionItem): { ok: boolean; message: string } {
     if (item.close) {
       spawnSync(USER_SHELL, shellArgs(item.close), { cwd: item.cwd, stdio: "ignore" });
       return { ok: true, message: "ran close command" };
-    }
-    if (item.closeAppName) {
-      const script = `tell application "${item.closeAppName}" to quit`;
-      spawnSync("osascript", ["-e", script], { stdio: "ignore" });
-      return { ok: true, message: `quit app "${item.closeAppName}"` };
     }
     if (item.pid) {
       try {
@@ -154,17 +148,6 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-function isAppRunning(appName: string): boolean {
-  try {
-    const result = spawnSync("osascript", ["-e", `tell application "${appName}" to running`], {
-      encoding: "utf8",
-    });
-    return result.stdout?.trim() === "true";
-  } catch {
-    return false;
-  }
-}
-
 // Whether an item is actually still running — true/false when we have a
 // reliable signal, null when we don't and refuse to guess.
 //
@@ -178,17 +161,12 @@ function isAppRunning(appName: string): boolean {
 // produces near-constant false positives for exactly the items (GUI apps,
 // backgrounded containers) this check exists to help with.
 //
-// - closeAppName items: ask macOS by name — `tell application "X" to
-//   running` — using the exact same name already used to quit it via
-//   `tell application "X" to quit`, so this is consistent with how closing
-//   already works and isn't a new naming convention.
 // - close-command items (arbitrary custom command, e.g. `docker stop ...`):
 //   no generic way to verify. Rather than guess from the (expectedly dead)
 //   launcher pid, report unknown — never flagged as stale, never pruned.
 // - everything else: closing this item IS killing item.pid directly, so
 //   that pid's liveness is accurate and meaningful here.
 function itemRunning(item: SessionItem): boolean | null {
-  if (item.closeAppName) return isAppRunning(item.closeAppName);
   if (item.close) return null;
   return !item.pid || isPidAlive(item.pid);
 }
