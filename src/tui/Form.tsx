@@ -203,14 +203,7 @@ export function ItemForm({
     launch: existing?.launch ?? "",
     side: existing?.side ?? presetSide ?? "frontend",
     cwd: existing?.cwd ?? "",
-    closeStrategy: existing?.closeAppName
-      ? "app"
-      : existing?.close
-        ? "command"
-        : existing
-          ? "none"
-          : "app",
-    closeAppName: existing?.closeAppName ?? "",
+    closeStrategy: existing?.close ? "command" : existing ? "none" : "process",
     closeCommand: existing?.close ?? "",
     delayMs: existing?.delayMs ? String(existing.delayMs) : "",
   });
@@ -257,20 +250,11 @@ export function ItemForm({
       label: "Close via",
       kind: "select",
       options: [
-        { label: "Quit macOS app", value: "app" },
         { label: "Custom command", value: "command" },
         { label: "Kill process", value: "process" },
         { label: "Leave running", value: "none" },
       ],
     });
-    if (values.closeStrategy === "app") {
-      base.push({
-        key: "closeAppName",
-        label: "App name",
-        kind: "text",
-        placeholder: "Visual Studio Code",
-      });
-    }
     if (values.closeStrategy === "command") {
       base.push({
         key: "closeCommand",
@@ -303,9 +287,6 @@ export function ItemForm({
     };
     if (isSplit) item.side = values.side as ItemSide;
     if (values.cwd.trim()) item.cwd = values.cwd.trim();
-    if (values.closeStrategy === "app" && values.closeAppName.trim()) {
-      item.closeAppName = values.closeAppName.trim();
-    }
     if (values.closeStrategy === "command" && values.closeCommand.trim()) {
       item.close = values.closeCommand.trim();
     }

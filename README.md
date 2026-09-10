@@ -108,7 +108,7 @@ workspaces:
       - name: editor
         type: app
         launch: code .
-        closeAppName: Visual Studio Code
+        close: osascript -e 'tell application "Visual Studio Code" to quit'
       - name: frontend dev server
         type: command
         launch: npm run dev
@@ -131,11 +131,10 @@ workspaces:
       - name: editor
         type: app
         launch: code .
-        closeAppName: Visual Studio Code
+        close: osascript -e 'tell application "Visual Studio Code" to quit'
       - name: terminal
         type: app
         launch: open -a Ghostty
-        closeAppName: Ghostty
       - name: docker
         type: command
         launch: docker compose up -d
@@ -143,8 +142,12 @@ workspaces:
       - name: mongo-compass
         type: app
         launch: open -a "MongoDB Compass" "mongodb://localhost:27017"
-        closeAppName: MongoDB Compass
+        close: osascript -e 'tell application "MongoDB Compass" to quit'
 ```
+
+`close` is just a shell command — `osascript ...` above is one example (macOS
+AppleScript), not something wsm has special support for. See Notes below for
+the Linux equivalent.
 
 Currently-open workspaces are tracked in
 `~/.config/workspace-manager/state.json` (PIDs, close commands) so `wsm open`
@@ -152,10 +155,23 @@ knows what to tear down and `wsm status` can report on it.
 
 ## Notes
 
-- `type: app` items launched via `open -a` exit immediately (macOS forks the
-  real app), so closing them relies on `closeAppName` (quits the app) rather
-  than killing a PID. `type: command` items are launched detached in their
-  own process group and are killed by PID when no `close` command is given.
+- `type: app` items launched via `open -a` (or similar) exit immediately —
+  the launcher shell hands off to the real, separate app process and returns,
+  so there's nothing meaningful left to kill by PID. Give these a `close`
+  command (e.g. `osascript -e 'tell application "X" to quit'` on macOS,
+  `pkill -x "X"` on Linux) if you want them closed when switching away;
+  without one, `wsm close` just leaves them running. `type: command` items
+  are launched detached in their own process group and are killed by PID
+  when no `close` command is given, which works correctly for anything that
+  stays attached to the launcher shell (most CLI tools, `docker run -d`,
+  etc.) — just not `type: app`-style hand-off launches.
+- wsm has no built-in "quit this app by name" mechanism (there used to be
+  one, macOS-only via AppleScript — removed, since there's no equivalent API
+  that works the same way across desktop environments, especially on Linux
+  where X11 has tools like `wmctrl`/`xdotool` but Wayland deliberately
+  restricts this kind of cross-app control by design, compositor by
+  compositor). Use `close` for anything that needs more than a plain PID
+  kill.
 - Item order matters: items launch in the order listed, so put things that
   need a head start (e.g. `docker compose up -d`) before things that depend
   on them, optionally adding a delay via the TUI's "delay before next item"

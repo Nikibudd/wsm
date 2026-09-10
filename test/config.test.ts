@@ -46,7 +46,7 @@ describe("config", () => {
           frontendCwd: "/dev/acme-web",
           backendCwd: "/dev/acme-api",
           items: [
-            { name: "editor", type: "app", launch: "code .", closeAppName: "Visual Studio Code" },
+            { name: "editor", type: "app", launch: "code ." },
             { name: "backend", type: "command", launch: "task runserver", side: "backend" },
             {
               name: "frontend",
