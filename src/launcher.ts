@@ -1,5 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
-import { expandHome } from "./paths.js";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import { expandHome, getItemLogPath, ensureLogsDir } from "./paths.js";
 import { loadState, saveState } from "./state.js";
 import { loadConfig, findWorkspace, getSettings } from "./config.js";
 import type { Session, SessionItem, State, Workspace, WorkspaceItem } from "./types.js";
@@ -28,20 +29,81 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function launchItem(workspace: Workspace, item: WorkspaceItem): SessionItem {
-  const cwd = resolveCwd(workspace, item);
-  const child = spawn(USER_SHELL, shellArgs(item.launch), {
-    cwd,
-    detached: true,
-    stdio: "ignore",
+// How long to watch a freshly-launched item for an immediate crash before
+// assuming it's fine. Hardcoded, not a user setting (see AGENTS.md's note
+// that the CLI's fast paths stay config-free). Overridable only for tests —
+// without this seam, every openWorkspace-calling test would pay this
+// latency for real, and there are ~15 of them.
+const DEFAULT_OBSERVE_WINDOW_MS = 4000;
+let observeWindowMs = DEFAULT_OBSERVE_WINDOW_MS;
+
+/** Test-only: override the launch-failure observation window duration. */
+export function __setObserveWindowMsForTesting(ms: number): void {
+  observeWindowMs = ms;
+}
+
+// Resolves with the child's exit code if it exits within `timeoutMs`, or
+// null if the window elapses first — still running is not a failure, it's
+// just unknown, and must be treated as silence rather than success/failure.
+function observeExit(child: ChildProcess, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const onExit = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(code);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.off("exit", onExit);
+      resolve(null);
+    }, timeoutMs);
+    child.once("exit", onExit);
   });
+}
+
+function launchItem(workspace: Workspace, item: WorkspaceItem): { sessionItem: SessionItem; observe: Promise<void> } {
+  const cwd = resolveCwd(workspace, item);
+  const logPath = getItemLogPath(workspace.name, item.name);
+  ensureLogsDir();
+  // OS-level fd redirection (not Node-side piping): the log fd is handed
+  // directly to the child's stdio, so capturing output costs nothing in
+  // this process — no stream plumbing, no backpressure, nothing to await.
+  const logFd = fs.openSync(logPath, "w");
+  let child: ChildProcess;
+  try {
+    child = spawn(USER_SHELL, shellArgs(item.launch), {
+      cwd,
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+    });
+  } finally {
+    // The child already has its own duped copy of the fd; our copy is done.
+    fs.closeSync(logFd);
+  }
   child.unref();
+
+  const observe = observeExit(child, observeWindowMs).then((code) => {
+    // code === 0 (fast clean exit, e.g. `open -a X .` / `docker run -d`)
+    // and code === null (still running when the window closed) are both
+    // expected outcomes, not failures — only a non-zero exit is flagged.
+    if (code !== null && code !== 0) {
+      console.error(`✗ ${item.name} exited with code ${code} shortly after launch — see ${logPath}`);
+    }
+  });
+
   return {
-    name: item.name,
-    type: item.type,
-    pid: child.pid,
-    close: item.close,
-    cwd,
+    sessionItem: {
+      name: item.name,
+      type: item.type,
+      pid: child.pid,
+      close: item.close,
+      cwd,
+      logPath,
+    },
+    observe,
   };
 }
 
@@ -121,10 +183,16 @@ export async function openWorkspace(name: string, opts: { close?: boolean }): Pr
 
   console.log(`Opening workspace "${name}"...`);
   const items: SessionItem[] = [];
+  // Each item's observation window starts at spawn time and runs
+  // concurrently with the others (and with any inter-item delayMs) — only
+  // awaited together at the end, so total added latency stays ~one window
+  // regardless of item count, not one window per item.
+  const observations: Promise<void>[] = [];
   for (const item of workspace.items) {
     console.log(`  → ${item.name}: ${item.launch}`);
-    const sessionItem = launchItem(workspace, item);
+    const { sessionItem, observe } = launchItem(workspace, item);
     items.push(sessionItem);
+    observations.push(observe);
     if (item.delayMs) await sleep(item.delayMs);
   }
 
@@ -136,6 +204,8 @@ export async function openWorkspace(name: string, opts: { close?: boolean }): Pr
   state.sessions.push(session);
   saveState(state);
   console.log(`Workspace "${name}" is open (${items.length} item(s)).`);
+
+  await Promise.all(observations);
 }
 
 function isPidAlive(pid: number): boolean {

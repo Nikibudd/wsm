@@ -80,7 +80,7 @@ going forward.
 
 ```
 src/
-  paths.ts       config/state file locations, ~ expansion
+  paths.ts       config/state/log file locations, ~ expansion, path-segment sanitization
   types.ts       Config/Workspace/WorkspaceItem/Session/State shapes
   jsonFile.ts    shared safe-load/save-JSON-file contract, used by state.ts and theme.ts
   config.ts      load/save ~/.config/workspace-manager/config.yaml
@@ -174,6 +174,22 @@ Muted/secondary text (`dimColor`) intentionally stays untethered to the
 theme — `dimColor` dims whatever the terminal's current foreground already
 is, so it looks correct under any theme without needing its own color role.
 
+`wsm open` captures every launched item's stdout+stderr to a per-item log
+file under `<configDir>/logs/` (`paths.ts`'s `getItemLogPath(workspaceName,
+itemName)`, one fixed, overwritten-not-accumulated file per (workspace,
+item) pair — `<sanitized-workspace>__<sanitized-item>.log`) and watches each
+item for `DEFAULT_OBSERVE_WINDOW_MS` (4s, hardcoded in `launcher.ts`, not a
+user setting) after spawn for an immediate non-zero exit, printing an error
+pointing at the log file if one happens. A fast *clean* exit (code 0, e.g.
+`open -a X .` handing off to the real app) and silence (still running when
+the window closes) are both expected outcomes, not failures — see
+`itemRunning`'s comment above for the same "dead launcher pid is normal for
+hand-off launches" reasoning this builds on. Since interactive-shell launch
+(`$SHELL -i -c ...`, see below) sources the user's rc files, a log can
+legitimately start with shell-startup noise (a `~/.zshrc` neofetch/fastfetch
+banner, etc.) before the actual command's output — don't mistake that for
+the log capture being broken.
+
 ## Lessons learned (don't regress these)
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not
@@ -183,6 +199,76 @@ is, so it looks correct under any theme without needing its own color role.
   "command not found." `-i` (interactive) is what makes the shell source rc
   files, matching what actually happens when a command is typed into a real
   terminal. See `test/launcher.test.ts` for the regression coverage.
+
+- **Per-item log capture uses OS-level fd redirection, not Node-side
+  piping — pass a real fd number as `stdio[1]`/`stdio[2]`, not `"pipe"` plus
+  manual `.on("data", ...)` plumbing.** `launchItem` does
+  `fs.openSync(logPath, "w")` and hands that fd straight to `spawn`'s
+  `stdio`, then `fs.closeSync`s its own copy immediately after — the child
+  has already duped it, so our copy is done being useful and holding it open
+  would leak an fd per launched item. This is genuinely free (no stream
+  backpressure, nothing to await, nothing that can throw in this process)
+  and was chosen over piping specifically because `wsm open` must stay fast.
+  A child's `"exit"` event on the `ChildProcess` object still fires
+  normally with fd-based stdio — that event is libuv process-lifecycle
+  tracking, unrelated to how stdout/stderr are wired — so launch-failure
+  detection (below) can listen for it exactly as if stdio were `"pipe"`.
+
+- **Launch-failure detection's 4-second observation window
+  (`DEFAULT_OBSERVE_WINDOW_MS` in `launcher.ts`) is deliberately overridable
+  only through a test-only setter (`__setObserveWindowMsForTesting`), not
+  Jest fake timers.** Fake timers don't mix cleanly with the real
+  `setTimeout` inside `observeExit` racing a mocked child's real
+  `EventEmitter.emit("exit", ...)` from a test — mocking `child_process`
+  already gives full control without needing to also fake the clock, and
+  fake-timers would have meant auditing all ~15 pre-existing
+  `openWorkspace`-calling tests for timer interactions they don't otherwise
+  care about. The setter defaults every test in `test/launcher.test.ts` to a
+  tiny window (15ms) in the shared `beforeEach`, with individual
+  failure-detection tests overriding it further (still small — 20–120ms,
+  never the real 4s) where the exact value matters (e.g. the concurrency
+  test needs a window wide enough to measure against).
+
+- **`test/launcher.test.ts`'s `node:child_process` mock must return a real
+  `EventEmitter` (`MockChildProcess`), not a plain `{ pid, unref }` object.**
+  Launch-failure detection listens for the spawned child's `"exit"` event
+  (`child.once("exit", ...)`), so tests need to simulate that by calling
+  `spawnedChildren[i].emit("exit", code)` on the mock. The trick for doing
+  this without fake timers or an artificial delay: `openWorkspace`'s body
+  runs entirely synchronously (no `await` is actually reached, since
+  `item.delayMs` is unset in these tests) right up until it awaits the
+  observation windows at the very end — calling but not yet awaiting it
+  (`const promise = launcher.openWorkspace(...)`) already runs that
+  synchronous prefix, including `spawn()` and attaching the `"exit"`
+  listener, before the test's next line executes. So the test can call
+  `.emit("exit", code)` synchronously right after the (unawaited) call and
+  before `await promise`, and the listener is guaranteed to already be
+  attached. Emitting `"exit"` *inside* the mock's `spawn` implementation
+  itself doesn't work — the listener isn't attached until *after* `spawn()`
+  returns, so a synchronous same-tick emit from inside the mock is missed;
+  it would need an async deferral like `setImmediate` instead, which this
+  synchronous-prefix trick avoids entirely.
+
+- **Observation windows are collected into an array and `Promise.all`'d
+  once, after the item-launch loop — never awaited per item inside the
+  loop.** Each window starts at spawn time (inside `launchItem`) and keeps
+  running while subsequent items are launched (and while any `delayMs`
+  pauses happen), so N items pay for roughly one window's worth of total
+  added latency, not N windows sequentially. Awaiting per item inside the
+  loop would silently turn `wsm open`'s added latency into
+  `4s * item count`, defeating the reason a hardcoded window (not a piped
+  synchronous wait) was chosen in the first place.
+
+- **Don't use a hand-rolled regex/blocklist for the log-path traversal
+  check — collapse to an allowlist instead.** `sanitizePathSegment` in
+  `paths.ts` replaces anything outside `[A-Za-z0-9._-]` (which includes every
+  `/`) with `_` first, then only needs to reject the now-`/`-free leftover
+  cases (empty, `"."`, `".."`) — it can never see an actual `/` to
+  special-case, so there's no way for a crafted name like `"../../etc"` to
+  survive as a real path separator. Rejecting `"."`/`".."` *after* the
+  replace (not before) matters: an input that only becomes `"."` or `".."`
+  post-sanitization (e.g. a name that's entirely unsafe characters padding
+  around real dots) still needs to be caught.
 
 - **Don't use `ink-text-input`.** It computes its next value from an
   `originalValue` *prop* rather than a functional state update. Ink can
