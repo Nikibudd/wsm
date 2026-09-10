@@ -26,16 +26,25 @@ function readConfigYaml(tmpDir: string): any {
 describe("App (TUI)", () => {
   let tmpDir: string;
   const previousEnv = process.env.WSM_CONFIG_DIR;
+  const previousShellEnv = process.env.SHELL;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wsm-app-test-"));
     process.env.WSM_CONFIG_DIR = tmpDir;
+    // Unset by default so the one-time autocomplete-setup prompt (see the
+    // "Autocomplete setup" describe block below) never fires here — it only
+    // triggers for a detected (zsh/bash) shell, and these tests exercise
+    // everything else about the App, keystroke-for-keystroke, with no
+    // knowledge of that prompt existing.
+    delete process.env.SHELL;
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     if (previousEnv === undefined) delete process.env.WSM_CONFIG_DIR;
     else process.env.WSM_CONFIG_DIR = previousEnv;
+    if (previousShellEnv === undefined) delete process.env.SHELL;
+    else process.env.SHELL = previousShellEnv;
   });
 
   test("shows the empty state with no workspaces configured", async () => {
@@ -278,7 +287,12 @@ describe("App (TUI)", () => {
     unmount();
 
     const config = readConfigYaml(tmpDir);
-    expect(config.settings).toEqual({ defaultClose: false, autoPruneStaleSessions: true });
+    expect(config.settings).toEqual({
+      defaultClose: false,
+      autoPruneStaleSessions: true,
+      autocomplete: false,
+      autocompletePrompted: false,
+    });
   });
 
   test("cycling and saving the Theme field persists the selection to themes.json", async () => {
@@ -331,6 +345,164 @@ describe("App (TUI)", () => {
   });
 });
 
+describe("Autocomplete setup", () => {
+  let tmpDir: string;
+  let rcFile: string;
+  const previousConfigEnv = process.env.WSM_CONFIG_DIR;
+  const previousRcEnv = process.env.WSM_RC_FILE;
+  const previousShellEnv = process.env.SHELL;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "wsm-app-autocomplete-test-"));
+    process.env.WSM_CONFIG_DIR = tmpDir;
+    rcFile = path.join(tmpDir, ".zshrc-under-test");
+    process.env.WSM_RC_FILE = rcFile;
+    process.env.SHELL = "/bin/zsh";
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (previousConfigEnv === undefined) delete process.env.WSM_CONFIG_DIR;
+    else process.env.WSM_CONFIG_DIR = previousConfigEnv;
+    if (previousRcEnv === undefined) delete process.env.WSM_RC_FILE;
+    else process.env.WSM_RC_FILE = previousRcEnv;
+    if (previousShellEnv === undefined) delete process.env.SHELL;
+    else process.env.SHELL = previousShellEnv;
+  });
+
+  test("prompts once, on first run with a supported shell, to set up tab-completion", async () => {
+    const { lastFrame, unmount } = render(<App />);
+    await flush();
+    expect(lastFrame()).toContain("tab-completion");
+    unmount();
+  });
+
+  test("confirming the prompt installs completion and persists the choice", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("y");
+    await flush();
+
+    unmount();
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings.autocomplete).toBe(true);
+    expect(config.settings.autocompletePrompted).toBe(true);
+    const completionFile = path.join(tmpDir, "completion.zsh");
+    expect(fs.existsSync(completionFile)).toBe(true);
+    expect(fs.readFileSync(completionFile, "utf8")).toContain("wsm completion zsh");
+    expect(fs.readFileSync(rcFile, "utf8")).toContain(completionFile);
+  });
+
+  test("declining the prompt persists the choice without installing anything", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("n");
+    await flush();
+
+    unmount();
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings.autocomplete).toBe(false);
+    expect(config.settings.autocompletePrompted).toBe(true);
+    expect(fs.existsSync(rcFile)).toBe(false);
+  });
+
+  test("does not prompt again once already asked", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      "workspaces: []\nsettings:\n  autocompletePrompted: true\n",
+    );
+
+    const { lastFrame, unmount } = render(<App />);
+    await flush();
+
+    expect(lastFrame()).toContain("No workspaces yet.");
+    expect(lastFrame()).not.toContain("tab-completion");
+    unmount();
+  });
+
+  test("does not prompt when no supported shell is detected", async () => {
+    process.env.SHELL = "/usr/bin/fish";
+
+    const { lastFrame, unmount } = render(<App />);
+    await flush();
+
+    expect(lastFrame()).toContain("No workspaces yet.");
+    expect(lastFrame()).not.toContain("tab-completion");
+    unmount();
+  });
+
+  test("toggling autocompletion on from the Settings overlay installs it immediately", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      "workspaces: []\nsettings:\n  autocompletePrompted: true\n  autocomplete: false\n",
+    );
+
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush(); // -> "wsm open" field
+    stdin.write(ENTER);
+    await flush(); // -> "Dead sessions" field
+    stdin.write(ENTER);
+    await flush(); // -> "Shell completion" field (present because SHELL is set)
+    stdin.write(RIGHT); // Off -> On
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Theme field
+    stdin.write(ENTER);
+    await flush(); // last field -> submit
+
+    unmount();
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings.autocomplete).toBe(true);
+    const completionFile = path.join(tmpDir, "completion.zsh");
+    expect(fs.existsSync(completionFile)).toBe(true);
+    expect(fs.readFileSync(completionFile, "utf8")).toContain("wsm completion zsh");
+    expect(fs.readFileSync(rcFile, "utf8")).toContain(completionFile);
+  });
+
+  test("toggling autocompletion off from the Settings overlay uninstalls it", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      "workspaces: []\nsettings:\n  autocompletePrompted: true\n  autocomplete: true\n",
+    );
+    fs.writeFileSync(rcFile, "");
+    // Seed a real installed state matching settings.autocomplete: true above.
+    const { installCompletion } = await import("../src/completionInstall.js");
+    installCompletion("zsh");
+    expect(fs.existsSync(path.join(tmpDir, "completion.zsh"))).toBe(true);
+
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("s");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Dead sessions
+    stdin.write(ENTER);
+    await flush(); // -> Shell completion (currently On)
+    stdin.write(LEFT); // On -> Off
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Theme
+    stdin.write(ENTER);
+    await flush(); // submit
+
+    unmount();
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings.autocomplete).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "completion.zsh"))).toBe(false);
+    expect(fs.readFileSync(rcFile, "utf8")).not.toContain("wsm completion");
+    expect(fs.readFileSync(rcFile, "utf8")).toBe("");
+  });
+});
+
 describe("SettingsForm (Theme live preview)", () => {
   // SettingsForm itself, in isolation: the App/theme rendering pipeline
   // (which produces the actual on-screen color) is exercised separately by
@@ -344,7 +516,12 @@ describe("SettingsForm (Theme live preview)", () => {
     const onSubmit = jest.fn();
     const { stdin, unmount } = render(
       <SettingsForm
-        existing={{ defaultClose: true, autoPruneStaleSessions: false }}
+        existing={{
+          defaultClose: true,
+          autoPruneStaleSessions: false,
+          autocomplete: false,
+          autocompletePrompted: false,
+        }}
         themeNames={["Default", "Catppuccin Mocha", "Dracula"]}
         activeTheme="Default"
         onPreviewTheme={onPreviewTheme}

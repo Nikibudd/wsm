@@ -414,6 +414,7 @@ export function SettingsForm({
   existing,
   themeNames,
   activeTheme,
+  completionAvailable = false,
   onPreviewTheme,
   onSubmit,
   onCancel,
@@ -421,6 +422,8 @@ export function SettingsForm({
   existing: Required<Settings>;
   themeNames: string[];
   activeTheme: string;
+  /** Whether a supported shell (bash/zsh) was detected — hides the autocompletion field entirely otherwise, since there'd be nothing to install. */
+  completionAvailable?: boolean;
   onPreviewTheme: (name: string) => void;
   onSubmit: (result: SettingsFormResult) => void;
   onCancel: () => void;
@@ -428,6 +431,7 @@ export function SettingsForm({
   const [values, setValues] = useState<Record<string, string>>({
     defaultClose: existing.defaultClose ? "close" : "keep",
     autoPruneStaleSessions: existing.autoPruneStaleSessions ? "on" : "off",
+    autocomplete: existing.autocomplete ? "on" : "off",
     theme: activeTheme,
   });
 
@@ -450,6 +454,19 @@ export function SettingsForm({
         { label: "Auto-remove from state.json", value: "on" },
       ],
     },
+    ...(completionAvailable
+      ? [
+          {
+            key: "autocomplete",
+            label: "Shell completion",
+            kind: "select" as const,
+            options: [
+              { label: "Off", value: "off" },
+              { label: "On (adds one rc-file line)", value: "on" },
+            ],
+          },
+        ]
+      : []),
     {
       key: "theme",
       label: "Theme",
@@ -463,6 +480,8 @@ export function SettingsForm({
       settings: {
         defaultClose: values.defaultClose === "close",
         autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
+        autocomplete: completionAvailable ? values.autocomplete === "on" : existing.autocomplete,
+        autocompletePrompted: existing.autocompletePrompted,
       },
       theme: values.theme,
     });

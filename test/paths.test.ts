@@ -12,15 +12,20 @@ import {
   getItemLogPath,
   ensureLogsDir,
   sanitizePathSegment,
+  getCompletionScriptPath,
+  getRcFilePath,
 } from "../src/paths.js";
 
 describe("paths", () => {
   const previousEnv = process.env.WSM_CONFIG_DIR;
+  const previousRcEnv = process.env.WSM_RC_FILE;
   const previousArgv1 = process.argv[1];
 
   afterEach(() => {
     if (previousEnv === undefined) delete process.env.WSM_CONFIG_DIR;
     else process.env.WSM_CONFIG_DIR = previousEnv;
+    if (previousRcEnv === undefined) delete process.env.WSM_RC_FILE;
+    else process.env.WSM_RC_FILE = previousRcEnv;
     process.argv[1] = previousArgv1;
   });
 
@@ -135,6 +140,44 @@ describe("paths", () => {
         expect(fs.existsSync(logsDir)).toBe(true);
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("getCompletionScriptPath", () => {
+    test("is a shell-specific file under the config dir", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-completion-test";
+      expect(getCompletionScriptPath("zsh")).toBe(path.join("/tmp/wsm-completion-test", "completion.zsh"));
+      expect(getCompletionScriptPath("bash")).toBe(path.join("/tmp/wsm-completion-test", "completion.bash"));
+    });
+  });
+
+  describe("getRcFilePath", () => {
+    test("WSM_RC_FILE overrides the default rc file location, read live", () => {
+      process.env.WSM_RC_FILE = "~/custom-rc";
+      expect(getRcFilePath("zsh")).toBe(path.join(os.homedir(), "custom-rc"));
+      process.env.WSM_RC_FILE = "/tmp/other-rc";
+      expect(getRcFilePath("zsh")).toBe("/tmp/other-rc");
+    });
+
+    test("without WSM_RC_FILE, invoked as the real `wsm` binary, defaults to ~/.zshrc or ~/.bashrc", () => {
+      delete process.env.WSM_RC_FILE;
+      process.argv[1] = "/opt/homebrew/bin/wsm";
+      expect(getRcFilePath("zsh")).toBe(path.join(os.homedir(), ".zshrc"));
+      expect(getRcFilePath("bash")).toBe(path.join(os.homedir(), ".bashrc"));
+    });
+
+    // Same reasoning as getConfigDir's wsm/wsmdev split: a dev/test build
+    // must never be able to touch the developer's real shell rc file just
+    // because WSM_RC_FILE wasn't set. Route it into the (already-isolated)
+    // dev config dir instead.
+    test("without WSM_RC_FILE, invoked as anything other than exactly `wsm`, never resolves to the real home-dir rc file", () => {
+      delete process.env.WSM_RC_FILE;
+      delete process.env.WSM_CONFIG_DIR;
+      for (const invokedAs of ["/opt/homebrew/bin/wsmdev", "/some/path/dist/cli.js", "/repo/src/cli.ts"]) {
+        process.argv[1] = invokedAs;
+        expect(getRcFilePath("zsh")).not.toBe(path.join(os.homedir(), ".zshrc"));
+        expect(getRcFilePath("zsh")).toBe(path.join(getConfigDir(), "dev-rc.zsh"));
       }
     });
   });
