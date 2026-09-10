@@ -48,11 +48,22 @@ wsm close --all         # closes every currently open workspace
 wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
 wsm update              # downloads and installs the latest release, in place
+wsm completion <shell>  # prints a completion script for bash or zsh (usually set up for you, see below)
 ```
 
 `wsm update` only works on a real release install (see "From a release"
 above) — it refuses to run on a development build (`wsmdev`), which updates
 via `npm run build` instead.
+
+The first time you launch the TUI (`wsm`, no args), it offers to set up
+tab-completion for bash/zsh. Accepting adds one line to your shell rc file
+(`~/.zshrc`/`~/.bashrc`) that sources a small file wsm manages — nothing
+else about your rc file ever needs to change after that, including on
+future `wsm update`s. Declined it, or want to turn it on/off later? Toggle
+"Shell completion" from the Settings overlay (`s` from the Groups pane).
+Prefer to wire it up yourself instead of going through the prompt? `wsm
+completion zsh` / `wsm completion bash` prints the completion script
+directly, the same one the automatic setup uses.
 
 ## Configuring a workspace
 
@@ -165,6 +176,15 @@ knows what to tear down and `wsm status` can report on it.
   when no `close` command is given, which works correctly for anything that
   stays attached to the launcher shell (most CLI tools, `docker run -d`,
   etc.) — just not `type: app`-style hand-off launches.
+- `wsm open` captures every launched item's stdout+stderr to a log file
+  under `~/.config/workspace-manager/logs/` (one per workspace/item,
+  overwritten on each relaunch, not accumulated) and watches for about 4
+  seconds after launch — if an item exits with a non-zero code in that
+  window, wsm prints an error pointing at its log file so you don't have to
+  go hunting for why something didn't come up. A fast, clean exit (code 0 —
+  common for hand-off launches like `open -a X .` or `docker run -d`) and an
+  item still running when the window closes are both left alone, not
+  flagged.
 - wsm has no built-in "quit this app by name" mechanism (there used to be
   one, macOS-only via AppleScript — removed, since there's no equivalent API
   that works the same way across desktop environments, especially on Linux
