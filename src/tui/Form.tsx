@@ -583,7 +583,7 @@ export function CustomCommandForm({
 
   const fields: FieldDef[] = [
     { key: "name", label: "Name", kind: "text", placeholder: "e.g. logs" },
-    { key: "command", label: "Command", kind: "text", placeholder: "docker compose logs -f" },
+    { key: "command", label: "Command", kind: "text", placeholder: 'docker compose logs -f "$@"' },
   ];
 
   const handleSubmit = () => {
@@ -593,7 +593,9 @@ export function CustomCommandForm({
       return;
     }
     if (!isValidCustomCommandName(name)) {
-      setError("Name must be a valid shell function name (letters, digits, underscore; can't start with a digit)");
+      setError(
+        "Name must be a valid shell function name (letters, digits, underscore, hyphen; can't start with a digit or hyphen)",
+      );
       return;
     }
     if (name !== existing?.name && existingNames.includes(name)) {

@@ -134,6 +134,24 @@ describe("config", () => {
     expect(getCustomCommands(config)).toEqual([{ name: "logs", command: "docker compose logs -f" }]);
   });
 
+  // The TUI's Command field is single-line only, so a multi-line function
+  // body (e.g. pasted from an existing rc file) is necessarily hand-authored
+  // in config.yaml as a YAML block scalar — this is the actual authoring
+  // path for that, so it must round-trip the embedded newlines exactly.
+  test("saveConfig then loadConfig round-trips a multi-line custom command body", () => {
+    const original: Config = {
+      workspaces: [],
+      customCommands: [
+        {
+          name: "greet",
+          command: 'local who="${1:-world}"\n\nif [ -n "$who" ]; then\n  echo "hi $who"\nfi',
+        },
+      ],
+    };
+    saveConfig(original);
+    expect(loadConfig()).toEqual(original);
+  });
+
   test("saveConfig then loadConfig round-trips settings", () => {
     const original: Config = {
       workspaces: [],

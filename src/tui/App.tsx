@@ -500,7 +500,9 @@ function CustomCommandsScreen({
       </Text>
       <Text dimColor>
         Shell functions available in every new terminal (via `wsm commands`), independent of any
-        workspace.
+        workspace. The command is the exact function body (add "$@" yourself for passthrough args) —
+        for a multi-line body, edit config.yaml's customCommands directly, since this field is
+        single-line only.
       </Text>
       <Box height={1} />
       {commands.length === 0 ? (

@@ -217,11 +217,27 @@ reasoning as `getConfigDir` in the Lessons learned section below.
 under `settings` since it's a growable list of named entries, not a
 setting) are user-defined shell functions available in every new terminal,
 independent of any workspace — e.g. a `logs` shortcut for `docker compose
-logs -f`. `customCommandsScript(commands)` generates one POSIX shell
-function per entry (`name() { <command> "$@"; }`, forwarding extra args),
-and is deliberately lenient: an entry with an invalid name (checked against
-`isValidCustomCommandName`, the same shell-identifier rule the TUI form
-enforces at creation time) is silently skipped rather than thrown on,
+logs -f "$@"`, or a full multi-line function pulled out of someone's rc
+file to stop it cluttering every project's config. `customCommandsScript
+(commands)` generates one POSIX shell function per entry, wrapping `command`
+as the literal, indented function *body* — `name() {\n  <command>\n}`, via
+the internal `indentBody` helper (two-space indent on every non-blank line,
+blank lines left empty rather than padded). Deliberately **no** automatic
+"$@" forwarding: earlier versions of this feature auto-appended it after a
+single command line, but that only works for a bare one-liner — it breaks
+immediately for a real multi-line body (appending `"$@"` after a body's
+last line, e.g. a closing `fi`, isn't valid shell), so the field had to
+become "the exact body, write your own $@/$1 handling" to support anything
+beyond the simplest case. `customCommandsScript` is deliberately lenient
+about the *name*, though: an entry with an invalid one (checked against
+`isValidCustomCommandName`, the same rule the TUI form enforces at creation
+time — `[A-Za-z_][A-Za-z0-9_-]*`, i.e. a shell *function* name, not the
+stricter variable-identifier rule; bash/zsh both accept hyphens in function
+names, e.g. `vscode-close-here` — a real function pulled from an actual rc
+file while testing this feature, which silently vanished from `wsm
+commands`' output entirely before this was loosened, since the original,
+stricter pattern rejected it and `customCommandsScript` skips invalid names
+rather than erroring) is silently skipped rather than thrown on,
 because this runs on *every shell startup* via `commands.sh`'s
 `eval "$(wsm commands)"` — an exception here would break the eval and lock
 someone out of their shell over one bad hand-edited config.yaml entry, far
@@ -229,7 +245,21 @@ worse than just not getting that one function. `commands.sh` is shared
 across bash and zsh (`getCustomCommandsScriptPath`, no shell parameter),
 unlike completion.<shell>, because a plain shell function definition has no
 bash/zsh syntax split to account for — there's nothing here like
-completion's `compgen`/`compdef` API difference. The TUI screen
+completion's `compgen`/`compdef` API difference.
+
+The TUI's `CustomCommandForm` Command field is single-line only (`Form`'s
+text fields build their value off raw keystrokes, where `key.return` always
+means "next field/submit," never "insert a newline" — see the
+`ink-text-input` lesson below), so a genuinely multi-line body has to be
+hand-authored directly in `config.yaml` as a YAML block scalar; the round
+trip through `saveConfig`/`loadConfig` (plain `js-yaml` `dump`/`load`, no
+special handling needed) preserves the embedded newlines exactly, verified
+in `test/config.test.ts`. The TUI is still the easy path for ordinary
+one-line commands — this is a deliberate "simple case stays simple, complex
+case is still possible" split, not a missing feature; a real multi-line
+textarea field would be a much larger change to `Form.tsx`'s keystroke
+model for a need that, so far, hand-editing config.yaml already covers.
+The TUI screen
 (`CustomCommandsScreen` in `App.tsx`, key `c` from the Groups pane — a free
 key there, unlike in the workspaces/items panes where `c` already means
 something else) is a self-contained overlay with its own internal

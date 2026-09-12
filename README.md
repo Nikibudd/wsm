@@ -96,13 +96,40 @@ scripts the managed setup uses.
 ### Custom commands
 
 Press `c` from the Groups pane to open **Custom Commands** — shell
-functions available in every new terminal, independent of any workspace
-(e.g. a `logs` shortcut for `docker compose logs -f`, callable as
-`logs -n 50` since extra arguments are forwarded through). Each has a name
-(must be a valid shell function identifier: letters, digits, underscore,
-not starting with a digit) and a command. They only take effect in new
-shells once shell integration's rc line is in place (see above) — adding
-one before that just saves it to config for later.
+functions available in every new terminal, independent of any workspace.
+Each has a name (must be a valid shell function name: letters, digits,
+underscore, hyphen, not starting with a digit or hyphen) and a command, which becomes
+the exact body of the generated function:
+
+```
+logs() {
+  docker compose logs -f "$@"
+}
+```
+
+The command is used verbatim, with no automatic argument forwarding, so
+include `"$@"` yourself if you want passthrough args (e.g. `logs -n 50`).
+This is what makes richer functions possible too — not just single
+commands, but a full body with local variables and control flow, e.g. a
+function that only makes sense to keep in one place instead of pasted into
+every project's rc file:
+
+```yaml
+customCommands:
+  - name: vscode-close-here
+    command: |
+      local dir="${1:-$PWD}"; dir="${dir%/}"
+      local pid
+      pid=$(lsof -nP -a -d cwd -c Code 2>/dev/null | awk -v d="$dir" '$NF==d{print $2; exit}')
+      [ -z "$pid" ] && { echo "No VS Code window has $dir open."; return 0; }
+      kill "$pid"
+```
+
+The TUI's Command field is single-line only, so a multi-line body like that
+has to be hand-edited into `config.yaml` (a YAML block scalar, as above) —
+the TUI is still the easy path for simple one-liners. Custom commands only
+take effect in new shells once shell integration's rc line is in place (see
+above) — adding one before that just saves it to config for later.
 
 ## Configuring a workspace
 
