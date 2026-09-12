@@ -5,15 +5,21 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
 import { getSettings, loadConfig, saveConfig } from "../config.js";
 import { getConfigFile, getRcFilePath } from "../paths.js";
-import { detectShell, installCompletion, uninstallCompletion } from "../completionInstall.js";
-import type { CompletionShell } from "../completionInstall.js";
+import {
+  detectShell,
+  installCompletion,
+  installCompletionFilesOnly,
+  shellIntegrationRcBlock,
+  uninstallCompletion,
+} from "../shellIntegration.js";
+import type { CompletionShell } from "../shellIntegration.js";
 import { loadState } from "../state.js";
 import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
 import type { ThemeColors, ThemesFile } from "../theme.js";
-import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
+import type { Config, CustomCommand, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
-import { ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
-import { ConfirmDialog } from "./ConfirmDialog.js";
+import { CustomCommandForm, ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
+import { ConfirmDialog, ShellIntegrationPrompt } from "./ConfirmDialog.js";
 import { ThemeProvider, useTheme } from "./ThemeContext.js";
 
 type Pane = "groups" | "workspaces" | "items";
@@ -28,7 +34,8 @@ type Overlay =
   | { kind: "renameGroup"; groupName: string }
   | { kind: "confirmDeleteGroup"; groupName: string }
   | { kind: "settings" }
-  | { kind: "autocompletePrompt"; shell: CompletionShell };
+  | { kind: "customCommands" }
+  | { kind: "shellIntegrationPrompt"; shell: CompletionShell };
 
 function displayPath(p: string): string {
   const home = os.homedir();
@@ -402,6 +409,135 @@ function ItemPane({
   );
 }
 
+type CustomCommandsMode =
+  | { kind: "list" }
+  | { kind: "form"; index: number | null }
+  | { kind: "confirmDelete"; index: number };
+
+// Self-contained overlay, unlike the Groups->Workspaces->Items drill-down:
+// custom commands are a flat, workspace-independent list, so add/edit/delete
+// are all handled as internal modes here rather than as separate top-level
+// Overlay kinds in App — App only ever sees one { kind: "customCommands" }.
+function CustomCommandsScreen({
+  commands,
+  onChange,
+  onClose,
+  flash,
+}: {
+  commands: CustomCommand[];
+  onChange: (next: CustomCommand[]) => void;
+  onClose: () => void;
+  flash: (text: string) => void;
+}) {
+  const theme = useTheme();
+  const { stdout } = useStdout();
+  const width = Math.max(40, Math.min(70, (stdout?.columns || 80) - 4));
+  const [mode, setMode] = useState<CustomCommandsMode>({ kind: "list" });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    setSelectedIndex((i) => Math.min(i, commands.length));
+  }, [commands.length]);
+
+  useInput(
+    (input, key) => {
+      const maxIndex = commands.length; // synthetic "+ Add command" row
+      if (key.escape) {
+        onClose();
+      } else if (key.downArrow) {
+        setSelectedIndex((i) => Math.min(i + 1, maxIndex));
+      } else if (key.upArrow) {
+        setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (key.return || input === "a") {
+        if (input === "a" || selectedIndex === maxIndex) setMode({ kind: "form", index: null });
+        else setMode({ kind: "form", index: selectedIndex });
+      } else if (input === "d" && selectedIndex < maxIndex) {
+        setMode({ kind: "confirmDelete", index: selectedIndex });
+      }
+    },
+    { isActive: mode.kind === "list" },
+  );
+
+  if (mode.kind === "form") {
+    const existing = mode.index !== null ? commands[mode.index] : undefined;
+    return (
+      <CustomCommandForm
+        existing={existing}
+        existingNames={commands.map((c) => c.name)}
+        onSubmit={(command) => {
+          const next = [...commands];
+          if (mode.index !== null) next[mode.index] = command;
+          else next.push(command);
+          onChange(next);
+          setMode({ kind: "list" });
+          flash(`Saved custom command "${command.name}"`);
+        }}
+        onCancel={() => setMode({ kind: "list" })}
+      />
+    );
+  }
+
+  if (mode.kind === "confirmDelete") {
+    const command = commands[mode.index];
+    return command ? (
+      <ConfirmDialog
+        message={`Delete custom command "${command.name}"?`}
+        onConfirm={() => {
+          onChange(commands.filter((_, i) => i !== mode.index));
+          setMode({ kind: "list" });
+          flash(`Deleted custom command "${command.name}"`);
+        }}
+        onCancel={() => setMode({ kind: "list" })}
+      />
+    ) : null;
+  }
+
+  const addRowIndex = commands.length;
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={2} paddingY={1} width={width}>
+      <Text bold color={theme.accent}>
+        Custom commands
+      </Text>
+      <Text dimColor>
+        Shell functions available in every new terminal (via `wsm commands`), independent of any
+        workspace. The command is the exact function body (add "$@" yourself for passthrough args) —
+        type into the Command field to edit it (enter adds a line, esc stops editing).
+      </Text>
+      <Box height={1} />
+      {commands.length === 0 ? (
+        <Text dimColor>No custom commands yet.</Text>
+      ) : (
+        commands.map((c, i) => {
+          const selected = i === selectedIndex;
+          const lines = c.command.split("\n");
+          const preview = lines[0] + (lines.length > 1 ? " …" : "");
+          return (
+            <Box key={c.name} flexDirection="column" marginBottom={1}>
+              <Text {...rowStyle(selected, theme)}>
+                {selected ? "› " : "  "}
+                {c.name}
+              </Text>
+              {/* Only the first line, truncated: a multi-line command's raw
+                  "\n" would otherwise split this into extra rows that lose
+                  the leading indent, breaking the box's layout (confirmed
+                  via a real pty run, not just this test harness). */}
+              <Text dimColor wrap="truncate-end">
+                {"    "}
+                {preview}
+              </Text>
+            </Box>
+          );
+        })
+      )}
+      <Text {...rowStyle(selectedIndex === addRowIndex, theme, theme.success)}>
+        {selectedIndex === addRowIndex ? "› " : "  "}+ Add command
+      </Text>
+      <Box height={1} />
+      <Text dimColor>↑↓ select · enter edit · a add · d delete · esc close</Text>
+    </Box>
+  );
+}
+
 export function App() {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
@@ -444,12 +580,12 @@ export function App() {
   }, [config]);
 
   // One-time prompt, first run only: only fires for a detected (bash/zsh)
-  // shell, and only until settings.autocompletePrompted is set — the
-  // ConfirmDialog's own onConfirm/onCancel below is what sets it, whichever
-  // way the user answers, so this effect never fires twice.
+  // shell, and only until settings.shellIntegrationPrompted is set — the
+  // ShellIntegrationPrompt's own handlers below are what set it, whichever
+  // of the three ways the user answers, so this effect never fires twice.
   useEffect(() => {
-    if (shell && !getSettings(config).autocompletePrompted) {
-      setOverlay({ kind: "autocompletePrompt", shell });
+    if (shell && !getSettings(config).shellIntegrationPrompted) {
+      setOverlay({ kind: "shellIntegrationPrompt", shell });
     }
     // Mount-only: $SHELL/config are read once, at startup.
   }, []);
@@ -559,6 +695,8 @@ export function App() {
           setOverlay({ kind: "confirmDeleteGroup", groupName: groups[groupIndex]!.name });
         } else if (input === "s") {
           setOverlay({ kind: "settings" });
+        } else if (input === "c") {
+          setOverlay({ kind: "customCommands" });
         }
         return;
       }
@@ -680,7 +818,7 @@ export function App() {
 
   const hint = useMemo(() => {
     if (pane === "groups") {
-      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · ● = open · q quit";
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · c custom commands · ● = open · q quit";
     }
     if (pane === "workspaces") {
       return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · q quit";
@@ -880,28 +1018,47 @@ export function App() {
           }}
         />
       );
-    } else if (overlay.kind === "autocompletePrompt") {
+    } else if (overlay.kind === "shellIntegrationPrompt") {
       const rcFileName = path.basename(getRcFilePath(overlay.shell));
+      const rcBlock = shellIntegrationRcBlock(overlay.shell);
       overlayNode = (
-        <ConfirmDialog
-          title="Shell tab-completion"
-          message={`Enable wsm tab-completion for ${overlay.shell}? Adds one line to ${rcFileName} (once) that sources a file wsm manages and keeps up to date.`}
-          onConfirm={() => {
+        <ShellIntegrationPrompt
+          rcFileName={rcFileName}
+          rcBlock={rcBlock}
+          onInsert={() => {
             installCompletion(overlay.shell);
             setConfig((prev) => ({
               ...prev,
-              settings: { ...getSettings(prev), autocomplete: true, autocompletePrompted: true },
+              settings: { ...getSettings(prev), autocomplete: true, shellIntegrationPrompted: true },
             }));
             setOverlay(null);
-            flash("Tab-completion installed — restart your shell to use it");
+            flash("Shell integration installed — restart your shell to use it");
           }}
-          onCancel={() => {
+          onManual={() => {
+            installCompletionFilesOnly(overlay.shell);
             setConfig((prev) => ({
               ...prev,
-              settings: { ...getSettings(prev), autocompletePrompted: true },
+              settings: { ...getSettings(prev), autocomplete: true, shellIntegrationPrompted: true },
+            }));
+            setOverlay(null);
+            flash("Add the shown line to your rc file, then restart your shell");
+          }}
+          onSkip={() => {
+            setConfig((prev) => ({
+              ...prev,
+              settings: { ...getSettings(prev), shellIntegrationPrompted: true },
             }));
             setOverlay(null);
           }}
+        />
+      );
+    } else if (overlay.kind === "customCommands") {
+      overlayNode = (
+        <CustomCommandsScreen
+          commands={config.customCommands ?? []}
+          onChange={(next) => setConfig((prev) => ({ ...prev, customCommands: next }))}
+          onClose={() => setOverlay(null)}
+          flash={flash}
         />
       );
     } else if (overlay.kind === "confirmDeleteGroup") {

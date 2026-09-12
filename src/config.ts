@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { load, dump } from "js-yaml";
 import { getConfigFile, ensureConfigDir } from "./paths.js";
-import type { Config, Settings, Workspace } from "./types.js";
+import type { Config, CustomCommand, Settings, Workspace } from "./types.js";
 
 function defaultConfig(): Config {
   return { workspaces: [] };
@@ -42,9 +42,13 @@ const DEFAULT_SETTINGS: Required<Settings> = {
   defaultClose: true,
   autoPruneStaleSessions: false,
   autocomplete: false,
-  autocompletePrompted: false,
+  shellIntegrationPrompted: false,
 };
 
 export function getSettings(config: Config): Required<Settings> {
   return { ...DEFAULT_SETTINGS, ...config.settings };
+}
+
+export function getCustomCommands(config: Config): CustomCommand[] {
+  return config.customCommands ?? [];
 }

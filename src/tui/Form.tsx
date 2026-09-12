@@ -1,6 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
-import type { ItemSide, ItemType, Settings, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
+import type { Key } from "ink";
+import { isValidCustomCommandName } from "../customCommands.js";
+import type {
+  CustomCommand,
+  ItemSide,
+  ItemType,
+  Settings,
+  Workspace,
+  WorkspaceItem,
+  WorkspaceLayout,
+} from "../types.js";
 import { useTheme } from "./ThemeContext.js";
 
 export interface FieldOption {
@@ -11,7 +21,7 @@ export interface FieldOption {
 export interface FieldDef {
   key: string;
   label: string;
-  kind: "text" | "select";
+  kind: "text" | "select" | "multiline";
   options?: FieldOption[];
   placeholder?: string;
 }
@@ -37,6 +47,33 @@ interface FormProps {
   onCancel: () => void;
 }
 
+// A multiline field's cursor is a single flat character offset into the
+// whole value, including embedded "\n"s — moving it left/right by one
+// naturally crosses line boundaries correctly with no special-casing.
+// These two helpers translate that flat offset to/from a (line, column)
+// pair, which is what up/down movement and rendering the cursor in the
+// right place both need.
+function multilineCursorLineCol(value: string, cursor: number): { line: number; col: number } {
+  const clamped = Math.max(0, Math.min(cursor, value.length));
+  const before = value.slice(0, clamped);
+  const lines = before.split("\n");
+  return { line: lines.length - 1, col: lines[lines.length - 1]!.length };
+}
+
+// Moves the cursor up (-1) or down (+1) one line, preserving column as
+// closely as the target line's length allows (clamped, not wrapped) — the
+// same behavior any text editor's up/down arrow has.
+function multilineCursorVerticalMove(value: string, cursor: number, direction: -1 | 1): number {
+  const lines = value.split("\n");
+  const { line, col } = multilineCursorLineCol(value, cursor);
+  const targetLine = line + direction;
+  if (targetLine < 0 || targetLine >= lines.length) return cursor;
+  const targetCol = Math.min(col, lines[targetLine]!.length);
+  let offset = 0;
+  for (let i = 0; i < targetLine; i++) offset += lines[i]!.length + 1;
+  return offset + targetCol;
+}
+
 export function Form({
   title,
   accentColor,
@@ -49,6 +86,47 @@ export function Form({
   onCancel,
 }: FormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
+  // Multiline fields are modal: while not editing, enter/esc mean the same
+  // thing they do on every other field (advance-or-submit / cancel), so
+  // typing behavior stays consistent across the whole form. The moment you
+  // type anything else, this flips true and enter starts meaning "newline"
+  // instead — esc is the only way back out, to normal per-field navigation.
+  // Reset on every focus change so landing on (or back on) a multiline
+  // field always starts in the non-editing state, never mid-edit.
+  //
+  // The *decision* of which mode we're in is made from a ref
+  // (multilineEditingRef), not the useState value below — a large paste
+  // delivers many keystrokes across several of Ink's internal render
+  // cycles, and this needs to read as true the instant the first character
+  // of the paste sets it, not whenever React next happens to commit a
+  // render. Reading the state value here instead was a real bug: with a
+  // long paste, some of it would still be processed against a stale
+  // "not editing yet" view, so an embedded newline could hit `advanceOrSubmit`
+  // (closing/submitting the form mid-paste) instead of inserting a line,
+  // and the "start editing" branch re-reading `values[field.key]` on every
+  // one of those stale passes reset the cursor back to the same stale
+  // position each time — together corrupting the pasted text into merged,
+  // out-of-order lines. `multilineEditing` (state) still exists purely to
+  // drive rendering (color, hint text), kept in sync wherever the ref changes.
+  const multilineEditingRef = useRef(false);
+  const [multilineEditing, setMultilineEditing] = useState(false);
+  const setEditing = (next: boolean) => {
+    multilineEditingRef.current = next;
+    setMultilineEditing(next);
+  };
+  // A flat character offset into the multiline value (see the two helpers
+  // above). This is a ref, not state: Ink can deliver several keystrokes
+  // from one stdin chunk before a render commits, and inserting/deleting
+  // "at the cursor" needs to read the position left by the *previous*
+  // keystroke in that same burst, synchronously — a ref mutates
+  // immediately, where a captured state value would still read stale here
+  // the same way a naive (non-functional) text value once did (see the
+  // ink-text-input lesson below). cursorRenderTick forces a re-render for
+  // pure cursor moves (arrow keys), which don't otherwise touch `values`
+  // and so wouldn't cause one on their own.
+  const multilineCursor = useRef(0);
+  const [, setCursorRenderTick] = useState(0);
+  const bumpCursorRender = () => setCursorRenderTick((t) => t + 1);
   const { stdout } = useStdout();
   const theme = useTheme();
   const resolvedAccent = accentColor ?? theme.accent;
@@ -60,18 +138,91 @@ export function Form({
     }
   }, [fields.length, focusIndex]);
 
+  useEffect(() => {
+    setEditing(false);
+    multilineCursor.current = 0;
+  }, [focusIndex]);
+
   const advanceOrSubmit = () => {
     if (focusIndex === fields.length - 1) onSubmit();
     else setFocusIndex((i) => i + 1);
   };
 
+  // Shared by both multiline states below: cursor movement, backspace,
+  // ctrl+u, and plain-character insertion are identical whether this
+  // keystroke is what started editing or editing was already underway —
+  // only what enter/esc/tab do differs, handled by the callers.
+  const applyMultilineKeystroke = (fieldKey: string, input: string, key: Key) => {
+    const value = values[fieldKey] ?? "";
+    const pos = multilineCursor.current;
+
+    if (key.leftArrow) {
+      multilineCursor.current = Math.max(0, pos - 1);
+      bumpCursorRender();
+      return;
+    }
+    if (key.rightArrow) {
+      multilineCursor.current = Math.min(value.length, pos + 1);
+      bumpCursorRender();
+      return;
+    }
+    if (key.upArrow || key.downArrow) {
+      multilineCursor.current = multilineCursorVerticalMove(value, pos, key.upArrow ? -1 : 1);
+      bumpCursorRender();
+      return;
+    }
+    if (key.backspace || key.delete) {
+      if (pos === 0) return;
+      onChange(fieldKey, (prev) => prev.slice(0, pos - 1) + prev.slice(pos));
+      multilineCursor.current = pos - 1;
+      return;
+    }
+    if (key.ctrl && input === "u") {
+      onChange(fieldKey, () => "");
+      multilineCursor.current = 0;
+      return;
+    }
+    if (key.ctrl || key.meta) {
+      return;
+    }
+    if (input) {
+      // A discrete Enter keypress arrives as key.return with empty input,
+      // handled by the callers below — but a pasted line break often
+      // doesn't: some terminals send "\r" for a pasted newline (the same
+      // byte a real Enter key sends), and when it's folded into a larger
+      // `input` string rather than its own isolated keypress, Ink reports
+      // it as plain text, not key.return. Normalizing it here means a
+      // paste's line breaks land as "\n" the same as a discrete Enter does,
+      // regardless of which byte the source terminal happened to send.
+      const text = input.replace(/\r\n?/g, "\n");
+      onChange(fieldKey, (prev) => prev.slice(0, pos) + text + prev.slice(pos));
+      multilineCursor.current = pos + text.length;
+    }
+  };
+
   useInput((input, key) => {
+    const field = fields[focusIndex];
+
+    if (field?.kind === "multiline" && multilineEditingRef.current) {
+      if (key.escape) {
+        setEditing(false);
+        return;
+      }
+      if (key.return) {
+        const pos = multilineCursor.current;
+        onChange(field.key, (prev) => prev.slice(0, pos) + "\n" + prev.slice(pos));
+        multilineCursor.current = pos + 1;
+        return;
+      }
+      applyMultilineKeystroke(field.key, input, key);
+      return;
+    }
+
     if (key.escape) {
       onCancel();
       return;
     }
 
-    const field = fields[focusIndex];
     if (!field) return;
 
     if (key.upArrow) {
@@ -98,6 +249,27 @@ export function Form({
         return;
       }
       if (key.return) advanceOrSubmit();
+      return;
+    }
+
+    if (field.kind === "multiline") {
+      // Not editing yet: enter behaves like every other field (advance or
+      // submit). Starting to type — anything but tab, which stays a no-op
+      // here just like on a text field — is what switches into edit mode,
+      // applying this same keystroke immediately rather than requiring a
+      // separate "start editing" key first. The cursor starts at the end
+      // of the existing value, matching where typing would previously have
+      // always appended.
+      if (key.return) {
+        advanceOrSubmit();
+        return;
+      }
+      if (key.tab) {
+        return;
+      }
+      multilineCursor.current = (values[field.key] ?? "").length;
+      setEditing(true);
+      applyMultilineKeystroke(field.key, input, key);
       return;
     }
 
@@ -163,6 +335,66 @@ export function Form({
                     {value || f.placeholder || "—"}
                   </Text>
                 )
+              ) : f.kind === "multiline" ? (
+                (() => {
+                  const editing = focused && multilineEditing;
+                  // Distinct color while actively editing, on top of the
+                  // cursor block — the whole point is a visible answer to
+                  // "am I currently typing into this, or just looking at
+                  // it," since enter/esc mean different things in each state.
+                  const valueColor = editing ? resolvedAccent : theme.text;
+                  const cursor = editing
+                    ? multilineCursorLineCol(value, multilineCursor.current)
+                    : null;
+                  return (
+                    <Box flexDirection="column">
+                      {value ? (
+                        value.split("\n").map((line, li) => {
+                          if (!cursor || li !== cursor.line) {
+                            // Ink drops a fully-empty <Text> row's height,
+                            // collapsing blank lines — a single space keeps
+                            // them visible without changing what's shown.
+                            return (
+                              <Text key={li} color={valueColor}>
+                                {line || " "}
+                              </Text>
+                            );
+                          }
+                          // The line the cursor is on: highlight the
+                          // character it sits over (or a blank space, at
+                          // end of line) rather than always appending after
+                          // everything, now that the cursor can be
+                          // anywhere in the value, not just at the end.
+                          const before = line.slice(0, cursor.col);
+                          const at = line[cursor.col] ?? " ";
+                          const after = line.slice(cursor.col + 1);
+                          return (
+                            <Text key={li} color={valueColor}>
+                              {before}
+                              <Text backgroundColor={valueColor} color={theme.selectionText}>
+                                {at}
+                              </Text>
+                              {after}
+                            </Text>
+                          );
+                        })
+                      ) : (
+                        <Text color={focused ? valueColor : theme.border}>
+                          {editing ? (
+                            <Text backgroundColor={valueColor} color={theme.selectionText}>
+                              {" "}
+                            </Text>
+                          ) : null}
+                          {f.placeholder ? (
+                            <Text dimColor>{focused ? ` ${f.placeholder}` : f.placeholder}</Text>
+                          ) : focused ? null : (
+                            "—"
+                          )}
+                        </Text>
+                      )}
+                    </Box>
+                  );
+                })()
               ) : (
                 <Text color={focused ? resolvedAccent : theme.text}>
                   ‹ {f.options?.find((o) => o.value === value)?.label ?? value} ›
@@ -179,7 +411,13 @@ export function Form({
         </>
       ) : null}
       <Box height={1} />
-      <Text dimColor>↑↓ field · ←→ change · enter next / {submitLabel} · esc cancel</Text>
+      <Text dimColor>
+        {fields[focusIndex]?.kind === "multiline"
+          ? multilineEditing
+            ? "←→↑↓ move cursor · enter newline · esc done editing"
+            : `↑↓ field · enter next / ${submitLabel} · type to edit · esc cancel`
+          : `↑↓ field · ←→ change · enter next / ${submitLabel} · esc cancel`}
+      </Text>
     </Box>
   );
 }
@@ -488,7 +726,7 @@ export function SettingsForm({
         defaultClose: values.defaultClose === "close",
         autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
         autocomplete: completionAvailable ? values.autocomplete === "on" : existing.autocomplete,
-        autocompletePrompted: existing.autocompletePrompted,
+        shellIntegrationPrompted: existing.shellIntegrationPrompted,
       },
       theme: values.theme,
     });
@@ -541,6 +779,73 @@ export function RenameGroupForm({
   return (
     <Form
       title={`Rename group "${groupName}"`}
+      fields={fields}
+      values={values}
+      error={error}
+      submitLabel="save"
+      onChange={(k, updater) => {
+        setError("");
+        setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
+      }}
+      onSubmit={handleSubmit}
+      onCancel={onCancel}
+    />
+  );
+}
+
+export function CustomCommandForm({
+  existing,
+  existingNames,
+  onSubmit,
+  onCancel,
+}: {
+  existing?: CustomCommand;
+  existingNames: string[];
+  onSubmit: (command: CustomCommand) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({
+    name: existing?.name ?? "",
+    command: existing?.command ?? "",
+  });
+  const [error, setError] = useState("");
+
+  const fields: FieldDef[] = [
+    { key: "name", label: "Name", kind: "text", placeholder: "e.g. logs" },
+    {
+      key: "command",
+      label: "Command",
+      kind: "multiline",
+      placeholder: 'docker compose logs -f "$@"',
+    },
+  ];
+
+  const handleSubmit = () => {
+    const name = values.name.trim();
+    if (!name) {
+      setError("Name is required");
+      return;
+    }
+    if (!isValidCustomCommandName(name)) {
+      setError(
+        "Name must be a valid shell function name (letters, digits, underscore, hyphen; can't start with a digit or hyphen)",
+      );
+      return;
+    }
+    if (name !== existing?.name && existingNames.includes(name)) {
+      setError("A custom command with that name already exists");
+      return;
+    }
+    if (!values.command.trim()) {
+      setError("Command is required");
+      return;
+    }
+    onSubmit({ name, command: values.command.trim() });
+  };
+
+  return (
+    <Form
+      title={existing ? `Edit command · ${existing.name}` : "New custom command"}
       fields={fields}
       values={values}
       error={error}
