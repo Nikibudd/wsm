@@ -127,13 +127,15 @@ customCommands:
 
 The TUI's Command field supports this directly. Landing on it, `enter`
 behaves like on any other field (saves/moves on); typing anything else
-starts editing it, and from then on `enter` adds a line instead — `esc`
-stops editing (without closing the form), after which `enter` goes back to
-saving. The field's text turns a different color while you're actively
-editing it, so it's always clear which mode you're in. The same command is
-just as easy to hand-edit into `config.yaml` too (a YAML block scalar, as
-above), if you'd rather write it in an editor. Custom commands only take
-effect in new shells once shell integration's rc
+starts editing it, and from then on `enter` adds a line instead, `←→↑↓`
+move the cursor within the text (so you can go back and fix something
+without retyping everything after it), and `esc` stops editing (without
+closing the form), after which `enter` goes back to saving. The field's
+text turns a different color while you're actively editing it, so it's
+always clear which mode you're in. The same command is just as easy to
+hand-edit into `config.yaml` too (a YAML block scalar, as above), if you'd
+rather write it in an editor. Custom commands only take effect in new
+shells once shell integration's rc
 line is in place (see above) — adding one before that just saves it to
 config for later.
 

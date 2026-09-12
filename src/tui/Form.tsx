@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
 import type { Key } from "ink";
 import { isValidCustomCommandName } from "../customCommands.js";
@@ -47,6 +47,33 @@ interface FormProps {
   onCancel: () => void;
 }
 
+// A multiline field's cursor is a single flat character offset into the
+// whole value, including embedded "\n"s — moving it left/right by one
+// naturally crosses line boundaries correctly with no special-casing.
+// These two helpers translate that flat offset to/from a (line, column)
+// pair, which is what up/down movement and rendering the cursor in the
+// right place both need.
+function multilineCursorLineCol(value: string, cursor: number): { line: number; col: number } {
+  const clamped = Math.max(0, Math.min(cursor, value.length));
+  const before = value.slice(0, clamped);
+  const lines = before.split("\n");
+  return { line: lines.length - 1, col: lines[lines.length - 1]!.length };
+}
+
+// Moves the cursor up (-1) or down (+1) one line, preserving column as
+// closely as the target line's length allows (clamped, not wrapped) — the
+// same behavior any text editor's up/down arrow has.
+function multilineCursorVerticalMove(value: string, cursor: number, direction: -1 | 1): number {
+  const lines = value.split("\n");
+  const { line, col } = multilineCursorLineCol(value, cursor);
+  const targetLine = line + direction;
+  if (targetLine < 0 || targetLine >= lines.length) return cursor;
+  const targetCol = Math.min(col, lines[targetLine]!.length);
+  let offset = 0;
+  for (let i = 0; i < targetLine; i++) offset += lines[i]!.length + 1;
+  return offset + targetCol;
+}
+
 export function Form({
   title,
   accentColor,
@@ -67,6 +94,19 @@ export function Form({
   // Reset on every focus change so landing on (or back on) a multiline
   // field always starts in the non-editing state, never mid-edit.
   const [multilineEditing, setMultilineEditing] = useState(false);
+  // A flat character offset into the multiline value (see the two helpers
+  // above). This is a ref, not state: Ink can deliver several keystrokes
+  // from one stdin chunk before a render commits, and inserting/deleting
+  // "at the cursor" needs to read the position left by the *previous*
+  // keystroke in that same burst, synchronously — a ref mutates
+  // immediately, where a captured state value would still read stale here
+  // the same way a naive (non-functional) text value once did (see the
+  // ink-text-input lesson below). cursorRenderTick forces a re-render for
+  // pure cursor moves (arrow keys), which don't otherwise touch `values`
+  // and so wouldn't cause one on their own.
+  const multilineCursor = useRef(0);
+  const [, setCursorRenderTick] = useState(0);
+  const bumpCursorRender = () => setCursorRenderTick((t) => t + 1);
   const { stdout } = useStdout();
   const theme = useTheme();
   const resolvedAccent = accentColor ?? theme.accent;
@@ -80,6 +120,7 @@ export function Form({
 
   useEffect(() => {
     setMultilineEditing(false);
+    multilineCursor.current = 0;
   }, [focusIndex]);
 
   const advanceOrSubmit = () => {
@@ -87,23 +128,46 @@ export function Form({
     else setFocusIndex((i) => i + 1);
   };
 
-  // Shared by both multiline states below: backspace/ctrl+u/plain-character
-  // editing is identical whether this keystroke is what started editing or
-  // editing was already underway — only what enter/esc/tab do differs.
+  // Shared by both multiline states below: cursor movement, backspace,
+  // ctrl+u, and plain-character insertion are identical whether this
+  // keystroke is what started editing or editing was already underway —
+  // only what enter/esc/tab do differs, handled by the callers.
   const applyMultilineKeystroke = (fieldKey: string, input: string, key: Key) => {
+    const value = values[fieldKey] ?? "";
+    const pos = multilineCursor.current;
+
+    if (key.leftArrow) {
+      multilineCursor.current = Math.max(0, pos - 1);
+      bumpCursorRender();
+      return;
+    }
+    if (key.rightArrow) {
+      multilineCursor.current = Math.min(value.length, pos + 1);
+      bumpCursorRender();
+      return;
+    }
+    if (key.upArrow || key.downArrow) {
+      multilineCursor.current = multilineCursorVerticalMove(value, pos, key.upArrow ? -1 : 1);
+      bumpCursorRender();
+      return;
+    }
     if (key.backspace || key.delete) {
-      onChange(fieldKey, (prev) => prev.slice(0, -1));
+      if (pos === 0) return;
+      onChange(fieldKey, (prev) => prev.slice(0, pos - 1) + prev.slice(pos));
+      multilineCursor.current = pos - 1;
       return;
     }
     if (key.ctrl && input === "u") {
       onChange(fieldKey, () => "");
+      multilineCursor.current = 0;
       return;
     }
     if (key.ctrl || key.meta) {
       return;
     }
     if (input) {
-      onChange(fieldKey, (prev) => prev + input);
+      onChange(fieldKey, (prev) => prev.slice(0, pos) + input + prev.slice(pos));
+      multilineCursor.current = pos + input.length;
     }
   };
 
@@ -116,7 +180,9 @@ export function Form({
         return;
       }
       if (key.return) {
-        onChange(field.key, (prev) => prev + "\n");
+        const pos = multilineCursor.current;
+        onChange(field.key, (prev) => prev.slice(0, pos) + "\n" + prev.slice(pos));
+        multilineCursor.current = pos + 1;
         return;
       }
       applyMultilineKeystroke(field.key, input, key);
@@ -162,7 +228,9 @@ export function Form({
       // submit). Starting to type — anything but tab, which stays a no-op
       // here just like on a text field — is what switches into edit mode,
       // applying this same keystroke immediately rather than requiring a
-      // separate "start editing" key first.
+      // separate "start editing" key first. The cursor starts at the end
+      // of the existing value, matching where typing would previously have
+      // always appended.
       if (key.return) {
         advanceOrSubmit();
         return;
@@ -170,6 +238,7 @@ export function Form({
       if (key.tab) {
         return;
       }
+      multilineCursor.current = (values[field.key] ?? "").length;
       setMultilineEditing(true);
       applyMultilineKeystroke(field.key, input, key);
       return;
@@ -245,19 +314,41 @@ export function Form({
                   // "am I currently typing into this, or just looking at
                   // it," since enter/esc mean different things in each state.
                   const valueColor = editing ? resolvedAccent : theme.text;
+                  const cursor = editing
+                    ? multilineCursorLineCol(value, multilineCursor.current)
+                    : null;
                   return (
                     <Box flexDirection="column">
                       {value ? (
-                        value.split("\n").map((line, li, lines) => (
-                          <Text key={li} color={valueColor}>
-                            {line}
-                            {editing && li === lines.length - 1 ? (
-                              <Text backgroundColor={valueColor} color={theme.selectionText}>
-                                {" "}
+                        value.split("\n").map((line, li) => {
+                          if (!cursor || li !== cursor.line) {
+                            // Ink drops a fully-empty <Text> row's height,
+                            // collapsing blank lines — a single space keeps
+                            // them visible without changing what's shown.
+                            return (
+                              <Text key={li} color={valueColor}>
+                                {line || " "}
                               </Text>
-                            ) : null}
-                          </Text>
-                        ))
+                            );
+                          }
+                          // The line the cursor is on: highlight the
+                          // character it sits over (or a blank space, at
+                          // end of line) rather than always appending after
+                          // everything, now that the cursor can be
+                          // anywhere in the value, not just at the end.
+                          const before = line.slice(0, cursor.col);
+                          const at = line[cursor.col] ?? " ";
+                          const after = line.slice(cursor.col + 1);
+                          return (
+                            <Text key={li} color={valueColor}>
+                              {before}
+                              <Text backgroundColor={valueColor} color={theme.selectionText}>
+                                {at}
+                              </Text>
+                              {after}
+                            </Text>
+                          );
+                        })
                       ) : (
                         <Text color={focused ? valueColor : theme.border}>
                           {editing ? (
@@ -294,7 +385,7 @@ export function Form({
       <Text dimColor>
         {fields[focusIndex]?.kind === "multiline"
           ? multilineEditing
-            ? "enter newline · esc done editing"
+            ? "←→↑↓ move cursor · enter newline · esc done editing"
             : `↑↓ field · enter next / ${submitLabel} · type to edit · esc cancel`
           : `↑↓ field · ←→ change · enter next / ${submitLabel} · esc cancel`}
       </Text>

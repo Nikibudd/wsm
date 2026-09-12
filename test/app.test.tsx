@@ -8,6 +8,7 @@ import { load } from "js-yaml";
 import { App } from "../src/tui/App.js";
 import { SettingsForm } from "../src/tui/Form.js";
 
+const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
@@ -556,6 +557,72 @@ customCommands:
     const config = readConfigYaml(tmpDir);
     expect(config.customCommands).toEqual([
       { name: "greet", command: 'local who="${1:-world}"\necho "hi $who"' },
+    ]);
+  });
+
+  test("left/right arrows move the cursor within a line, so typing inserts instead of only appending", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("c");
+    await flush();
+    stdin.write("a");
+    await flush();
+    stdin.write("greet");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Command field
+
+    stdin.write("hello world"); // starts editing, cursor at the end
+    await flush();
+    stdin.write(LEFT.repeat(5)); // move left before "world" (back over its 5 characters)
+    await flush();
+    stdin.write("big "); // inserted at the cursor, not appended at the end
+    await flush();
+    stdin.write(ESC);
+    await flush();
+    stdin.write(ENTER); // submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.customCommands).toEqual([{ name: "greet", command: "hello big world" }]);
+  });
+
+  test("up/down arrows move the cursor between lines, preserving column, for editing an earlier line", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("c");
+    await flush();
+    stdin.write("a");
+    await flush();
+    stdin.write("greet");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Command field
+
+    stdin.write("line one"); // starts editing
+    await flush();
+    stdin.write(ENTER); // newline
+    await flush();
+    stdin.write("line two");
+    await flush();
+    stdin.write(UP); // move up to "line one", same column (end of "line one", 8 chars in)
+    await flush();
+    stdin.write(" EDITED"); // inserted at the end of "line one", not "line two"
+    await flush();
+    stdin.write(ESC);
+    await flush();
+    stdin.write(ENTER); // submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.customCommands).toEqual([
+      { name: "greet", command: "line one EDITED\nline two" },
     ]);
   });
 

@@ -286,11 +286,54 @@ Rendering follows the same state: the value's text (and its cursor block)
 render in the form's accent color only while `multilineEditing` is true for
 the focused field, plain `theme.text` otherwise — a real color change, not
 just the hint line, so "am I currently typing into this" has an answer
-that's visible without reading the footer. The value itself splits on
-`"\n"` into one `<Text>` per line inside a `<Box flexDirection="column">`,
-with the cursor block only ever on the last line (this editor is still
-append/backspace-at-end only, like every other field — no interior cursor
-movement, for any field kind, today).
+that's visible without reading the footer.
+
+**The multiline field has a real, movable cursor — left/right/up/down —
+unlike every other field in this form, which are still append/backspace-
+at-the-end only.** This wasn't in the first cut of the multiline field: it
+initially reused the same append-only model as `"text"` fields, on the
+reasoning that arrow keys were already spoken for (up/down for field
+navigation, left/right for `"select"` cycling) and interior movement would
+be a bigger change. That held up fine for a short single-line value, but
+was a real usability problem for a multi-line function body — with no way
+to move the cursor at all, fixing a typo on an earlier line meant
+backspacing through everything typed after it and retyping. Fixed by
+giving multiline fields their own cursor, `multilineCursor` — a flat
+character offset into the value (including embedded `"\n"`s), so moving it
+left/right by one naturally crosses line boundaries with no special-casing;
+`multilineCursorLineCol`/`multilineCursorVerticalMove` (top of `Form.tsx`)
+convert that flat offset to/from a `{ line, col }` pair for up/down
+movement (column-preserving, clamped rather than wrapped, same as any text
+editor) and for rendering the cursor on the right line. Insert/backspace
+now operate *at* the cursor (`value.slice(0, pos) + x + value.slice(pos)`)
+rather than always at the end.
+
+This only applies while `multilineEditing` — arrow keys otherwise keep
+their pre-existing meaning (field navigation / select cycling), completely
+unrelated to and unaffected by this. Left/right/up/down are still reserved
+globally the same way they always were; nothing here touches `"text"` or
+`"select"` fields.
+
+`multilineCursor` is a **ref**, not `useState` — deliberately, and for the
+same underlying reason `onChange` is always a functional updater (see the
+`FieldUpdater` comment above): Ink can deliver several keystrokes from one
+stdin chunk before a render commits, and inserting/deleting "at the cursor"
+needs the position left by the *previous* keystroke in that same burst,
+read synchronously, to compute the next slice correctly. A `useState`
+setter's functional form (`setCursor(prev => ...)`) would still correctly
+sequence multiple queued updates against *itself* — exactly how `onChange`
+already handles rapid typing — but that doesn't help here, because the
+value string (owned by the caller, updated via `onChange`) and the cursor
+position are two *separate* pieces of state, and computing the value's next
+slice needs to read "the current position" synchronously, not from inside
+some other state updater's own callback that runs later. A ref mutates
+immediately and is visible to the very next keystroke's handler invocation
+even if no render has happened in between, which a captured `useState`
+value can't offer. `cursorRenderTick` (a throwaway `useState<number>`,
+bumped on every pure cursor move) exists only to force a re-render for
+arrow-key-only movement, which doesn't otherwise touch `values` and so
+wouldn't cause one on its own — inserting/deleting text doesn't need this,
+since the accompanying `onChange` call already triggers a render.
 
 Hand-authoring a multi-line body directly in `config.yaml` (a YAML block
 scalar) still works exactly as before and is just as valid a path — the
