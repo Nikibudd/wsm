@@ -24,6 +24,16 @@ import { ThemeProvider, useTheme } from "./ThemeContext.js";
 
 type Pane = "groups" | "workspaces" | "items";
 
+// Top-level tabs, switched with 1/2/3 (see TabBar) rather than mnemonic
+// letters — Settings and Custom Commands used to be opened with "s"/"c"
+// from the Groups pane specifically, which meant the set of keys that did
+// something depended on which pane you were looking at. As persistent
+// tabs, they're reachable the same way from anywhere, and "s"/"c" go back
+// to meaning only what they already mean within the Workspaces tab
+// (settings had no other "s" collision; "c" still means duplicate/edit
+// depending on pane, unaffected by this).
+type Tab = "workspaces" | "customCommands" | "settings";
+
 type Overlay =
   | { kind: "addWorkspace"; presetGroup?: string }
   | { kind: "editWorkspace"; workspaceName: string }
@@ -33,8 +43,6 @@ type Overlay =
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
   | { kind: "confirmDeleteGroup"; groupName: string }
-  | { kind: "settings" }
-  | { kind: "customCommands" }
   | { kind: "shellIntegrationPrompt"; shell: CompletionShell };
 
 function displayPath(p: string): string {
@@ -136,6 +144,30 @@ function Footer({ hint, message, width }: { hint: string; message: string | null
           <Text color={theme.success}>{message}</Text>
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+const TABS: { key: Tab; number: string; label: string }[] = [
+  { key: "workspaces", number: "1", label: "Workspaces" },
+  { key: "customCommands", number: "2", label: "Custom Commands" },
+  { key: "settings", number: "3", label: "Settings" },
+];
+
+function TabBar({ activeTab, width }: { activeTab: Tab; width: number }) {
+  const theme = useTheme();
+  return (
+    <Box paddingX={1} width={width} borderStyle="round" borderColor={theme.accent}>
+      {TABS.map((tab) => {
+        const active = tab.key === activeTab;
+        return (
+          <Box key={tab.key} marginRight={3}>
+            <Text {...rowStyle(active, theme, theme.border)} bold={active}>
+              {tab.number} {tab.label}
+            </Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -421,12 +453,10 @@ type CustomCommandsMode =
 function CustomCommandsScreen({
   commands,
   onChange,
-  onClose,
   flash,
 }: {
   commands: CustomCommand[];
   onChange: (next: CustomCommand[]) => void;
-  onClose: () => void;
   flash: (text: string) => void;
 }) {
   const theme = useTheme();
@@ -439,12 +469,14 @@ function CustomCommandsScreen({
     setSelectedIndex((i) => Math.min(i, commands.length));
   }, [commands.length]);
 
+  // No "esc closes this" here anymore — as a persistent tab (not an
+  // overlay), there's nothing to close back to; switch tabs with 1/2/3
+  // instead. Esc still works as "cancel" for the form/confirm sub-modes
+  // below, unaffected.
   useInput(
     (input, key) => {
       const maxIndex = commands.length; // synthetic "+ Add command" row
-      if (key.escape) {
-        onClose();
-      } else if (key.downArrow) {
+      if (key.downArrow) {
         setSelectedIndex((i) => Math.min(i + 1, maxIndex));
       } else if (key.upArrow) {
         setSelectedIndex((i) => Math.max(i - 1, 0));
@@ -533,7 +565,7 @@ function CustomCommandsScreen({
         {selectedIndex === addRowIndex ? "› " : "  "}+ Add command
       </Text>
       <Box height={1} />
-      <Text dimColor>↑↓ select · enter edit · a add · d delete · esc close</Text>
+      <Text dimColor>↑↓ select · enter edit · a add · d delete · 1/2/3 tabs · q quit</Text>
     </Box>
   );
 }
@@ -544,6 +576,7 @@ export function App() {
 
   const [config, setConfig] = useState<Config>(() => loadConfig());
   const [themesFile, setThemesFile] = useState<ThemesFile>(() => loadThemes());
+  const [activeTab, setActiveTab] = useState<Tab>("workspaces");
   const [pane, setPane] = useState<Pane>("groups");
   const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
@@ -677,6 +710,29 @@ export function App() {
         return;
       }
 
+      // Number-key tab switching works from anywhere (any pane, any depth
+      // in the Workspaces drill-down) as long as no overlay/form is open —
+      // same isActive gate the rest of this handler already has. See the
+      // TabBar component for the visible 1/2/3 -> name mapping.
+      if (input === "1") {
+        setActiveTab("workspaces");
+        return;
+      }
+      if (input === "2") {
+        setActiveTab("customCommands");
+        return;
+      }
+      if (input === "3") {
+        setActiveTab("settings");
+        return;
+      }
+
+      // The rest of this handler is the Workspaces tab's own Groups ->
+      // Workspaces -> Items navigation — Custom Commands/Settings own
+      // their own input handling as separate components, only ever
+      // mounted while their tab is active.
+      if (activeTab !== "workspaces") return;
+
       if (pane === "groups") {
         const maxIndex = groups.length; // synthetic "+ New workspace" row
         if (key.downArrow) setGroupIndex((i) => Math.min(i + 1, maxIndex));
@@ -693,10 +749,6 @@ export function App() {
           setOverlay({ kind: "renameGroup", groupName: groups[groupIndex]!.name });
         } else if (input === "d" && groupIndex < groups.length) {
           setOverlay({ kind: "confirmDeleteGroup", groupName: groups[groupIndex]!.name });
-        } else if (input === "s") {
-          setOverlay({ kind: "settings" });
-        } else if (input === "c") {
-          setOverlay({ kind: "customCommands" });
         }
         return;
       }
@@ -814,19 +866,20 @@ export function App() {
     { isActive: overlay === null },
   );
 
-  const contentHeight = Math.max(10, rows - 5);
+  // -7, not -5: Header (3 rows) + the bordered TabBar (3 rows) + Footer (1).
+  const contentHeight = Math.max(10, rows - 7);
 
   const hint = useMemo(() => {
     if (pane === "groups") {
-      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · c custom commands · ● = open · q quit";
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · ● = open · 1/2/3 tabs · q quit";
     }
     if (pane === "workspaces") {
-      return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · q quit";
+      return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · 1/2/3 tabs · q quit";
     }
     if (isSplit) {
-      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · q quit";
+      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · 1/2/3 tabs · q quit";
     }
-    return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · q quit";
+    return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · 1/2/3 tabs · q quit";
   }, [pane, isSplit]);
 
   let overlayNode: React.ReactNode = null;
@@ -992,32 +1045,6 @@ export function App() {
           onCancel={() => setOverlay(null)}
         />
       );
-    } else if (overlay.kind === "settings") {
-      const previousSettings = getSettings(config);
-      overlayNode = (
-        <SettingsForm
-          existing={previousSettings}
-          themeNames={themesFile.themes.map((t) => t.name)}
-          activeTheme={themesFile.activeTheme}
-          completionAvailable={shell !== null}
-          onPreviewTheme={setPreviewThemeName}
-          onSubmit={({ settings, theme }) => {
-            if (shell && settings.autocomplete !== previousSettings.autocomplete) {
-              if (settings.autocomplete) installCompletion(shell);
-              else uninstallCompletion(shell);
-            }
-            setConfig((prev) => ({ ...prev, settings }));
-            setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
-            setPreviewThemeName(null);
-            setOverlay(null);
-            flash("Saved settings");
-          }}
-          onCancel={() => {
-            setPreviewThemeName(null);
-            setOverlay(null);
-          }}
-        />
-      );
     } else if (overlay.kind === "shellIntegrationPrompt") {
       const rcFileName = path.basename(getRcFilePath(overlay.shell));
       const rcBlock = shellIntegrationRcBlock(overlay.shell);
@@ -1052,15 +1079,6 @@ export function App() {
           }}
         />
       );
-    } else if (overlay.kind === "customCommands") {
-      overlayNode = (
-        <CustomCommandsScreen
-          commands={config.customCommands ?? []}
-          onChange={(next) => setConfig((prev) => ({ ...prev, customCommands: next }))}
-          onClose={() => setOverlay(null)}
-          flash={flash}
-        />
-      );
     } else if (overlay.kind === "confirmDeleteGroup") {
       const count = groups.find((g) => g.name === overlay.groupName)?.workspaces.length ?? 0;
       overlayNode = (
@@ -1082,14 +1100,61 @@ export function App() {
     }
   }
 
+  // Custom Commands and Settings are persistent tabs, not overlays: only
+  // ever mounted while their tab is active (see the main return below),
+  // so switching away and back discards any in-progress, unsaved edit —
+  // same as canceling out of a form already does.
+  const customCommandsNode = (
+    <CustomCommandsScreen
+      commands={config.customCommands ?? []}
+      onChange={(next) => setConfig((prev) => ({ ...prev, customCommands: next }))}
+      flash={flash}
+    />
+  );
+
+  const previousSettings = getSettings(config);
+  const settingsNode = (
+    <SettingsForm
+      existing={previousSettings}
+      themeNames={themesFile.themes.map((t) => t.name)}
+      activeTheme={themesFile.activeTheme}
+      completionAvailable={shell !== null}
+      onPreviewTheme={setPreviewThemeName}
+      onSubmit={({ settings, theme }) => {
+        if (shell && settings.autocomplete !== previousSettings.autocomplete) {
+          if (settings.autocomplete) installCompletion(shell);
+          else uninstallCompletion(shell);
+        }
+        setConfig((prev) => ({ ...prev, settings }));
+        setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
+        setPreviewThemeName(null);
+        flash("Saved settings");
+      }}
+      onCancel={() => {
+        setPreviewThemeName(null);
+      }}
+    />
+  );
+
+  const footerHint = overlay ? "" : activeTab === "workspaces" ? hint : "";
+
   return (
     <ThemeProvider value={activeTheme.colors}>
       <Box flexDirection="column" width={columns} height={rows}>
         <Header width={columns} />
+        <TabBar activeTab={activeTab} width={columns} />
         <Box flexGrow={1} flexDirection="row">
           {overlay ? (
             <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
               {overlayNode}
+            </Box>
+          ) : activeTab === "customCommands" ? (
+            <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
+              {customCommandsNode}
+            </Box>
+          ) : activeTab === "settings" ? (
+            <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
+              {settingsNode}
             </Box>
           ) : (
             <>
@@ -1122,7 +1187,7 @@ export function App() {
             </>
           )}
         </Box>
-        <Footer hint={overlay ? "" : hint} message={message} width={columns} />
+        <Footer hint={footerHint} message={message} width={columns} />
       </Box>
     </ThemeProvider>
   );

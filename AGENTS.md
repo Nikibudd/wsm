@@ -132,9 +132,10 @@ top-level `settings:` key in the same `config.yaml` — not a separate file.
 those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
 than reading `config.settings` directly, so a missing/partial `settings:`
 key never needs an `undefined` check at the call site. Edited via the TUI's
-Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
-`Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
-cycled with ←→) for each boolean rather than introducing a new field kind.
+Settings tab (press "3" — see the Tab system section below) — see
+`SettingsForm` in `Form.tsx`, which reuses `Form`'s existing "select" field
+kind (two options, cycled with ←→) for each boolean rather than introducing
+a new field kind.
 
 Shell integration (`shellIntegration.ts`, renamed from the narrower
 `completionInstall.ts` once it grew a second feature — see custom commands
@@ -171,7 +172,7 @@ touches a file on disk at all beyond that one static eval line.
 
 `installCompletion` is idempotent and safe to call on every `wsm update`
 (via `refreshInstalledCompletion`, gated on `settings.autocomplete`) and
-every time the TUI's Settings overlay saves with the field still on — every
+every time the TUI's Settings tab saves with the field still on — every
 managed file is always rewritten (self-healing if deleted), but the rc file
 itself is only touched when its current-marker block isn't already
 present. That includes **migrating** a leftover pre-upgrade block: if an rc
@@ -204,7 +205,7 @@ beyond confirm/cancel: "insert it for me" (`installCompletion`), "I'll
 insert it myself" (`installCompletionFilesOnly`, plus showing
 `shellIntegrationRcBlock`'s text so there's something to copy from the
 terminal), or skip. All three set `shellIntegrationPrompted` so it never
-asks again; the choice is also editable later from the Settings overlay
+asks again; the choice is also editable later from the Settings tab
 (`SettingsForm`'s `completionAvailable` prop hides the "Shell completion"
 field entirely when `detectShell()` returns null, since there'd be nothing
 to toggle). The prompt only fires for a detected shell (bash/zsh, same
@@ -398,14 +399,71 @@ chased further, since fixing it for real would mean addressing how centered
 overlays behave across large height changes in general, not something
 specific to this feature.
 
-The TUI screen
-(`CustomCommandsScreen` in `App.tsx`, key `c` from the Groups pane — a free
-key there, unlike in the workspaces/items panes where `c` already means
-something else) is a self-contained overlay with its own internal
-list/form/confirm-delete modes rather than three separate top-level
-`Overlay` kinds, since unlike the Groups→Workspaces→Items drill-down this
-is just one flat list; `App` only ever sees a single
-`{ kind: "customCommands" }`.
+The TUI screen (`CustomCommandsScreen` in `App.tsx`) is a self-contained
+component with its own internal list/form/confirm-delete modes rather than
+three separate top-level `Overlay` kinds, since unlike the
+Groups→Workspaces→Items drill-down this is just one flat list.
+
+## Tab system (Workspaces / Custom Commands / Settings)
+
+The TUI has a persistent tab bar (`TabBar` in `App.tsx`, rendered between
+`Header` and the main content area) switching between three top-level
+views — `1` Workspaces, `2` Custom Commands, `3` Settings — via
+`App`'s own `activeTab` (`Tab = "workspaces" | "customCommands" |
+"settings"`) state. Number keys were chosen deliberately over adding more
+mnemonic letters: Custom Commands and Settings both used to be opened with
+"c"/"s" from the Groups pane specifically (an `Overlay` kind each,
+`{ kind: "customCommands" }`/`{ kind: "settings" }`), which meant (a) the
+set of keys that did something depended on which pane you happened to be
+looking at, and (b) the Groups pane's own hint line kept growing as more
+top-level destinations got bolted onto it as more letters. As tabs,
+they're reachable the same way from anywhere in the app (any pane, any
+depth in the Workspaces drill-down) with a fixed, visible set of bindings
+that never changes meaning — the tab bar's own labels (e.g. "2 Custom
+Commands") are the documentation for what the number does, so there's
+nothing to separately memorize. `1`/`2`/`3` are handled at the very top of
+`App`'s global `useInput` (still gated `isActive: overlay === null`, same
+as every other global key), before any pane-specific logic — pane logic
+then early-returns entirely when `activeTab !== "workspaces"`, since
+Custom Commands and Settings own their input handling as separate
+components, only ever mounted while their own tab is active. "c"/"s" go
+back to meaning only what they already meant *within* the Workspaces tab
+(duplicate/edit-workspace-settings for "c", nothing reserved for "s") —
+removing them as Groups-pane shortcuts wasn't a compatibility break so
+much as undoing an overload that had crept in.
+
+Custom Commands and Settings render exactly the way these used to render
+as overlays — the same centered `<Box alignItems="center"
+justifyContent="center">` wrapper, just keyed off `activeTab` instead of
+`overlay` — so `CustomCommandsScreen`/`SettingsForm` needed no internal
+changes to become tab content. Switching away and back **remounts** them
+(`activeTab === "customCommands" ? <CustomCommandsScreen .../> : ...`),
+discarding any in-progress, unsaved edit exactly like canceling out of a
+form already did — this is deliberate, not a gap: there was no "leave a
+half-filled form and come back to it" affordance before, and tabs don't
+introduce one. `CustomCommandsScreen` no longer has an `onClose` prop or
+an `key.escape` handler in its list mode — there's nothing to "close" back
+to now that it isn't modal; esc still cancels its form/confirm-delete
+sub-modes, unaffected. The Workspaces tab's own navigation state (`pane`,
+`groupIndex`, `wsIndex`, `itemIndex`, `itemColumn`) lives in `App` itself,
+not inside the conditionally-rendered pane components, so switching away
+to another tab and back *does* preserve exactly where you were in the
+drill-down — verified in `app.test.tsx`.
+
+The outer `Footer`'s hint line is blanked (`""`) whenever `activeTab !==
+"workspaces"`, same treatment overlays already got — Custom Commands and
+Settings each render their own hint line inside their own box instead.
+The Groups-pane hint no longer mentions "s"/"c" for these two, and gained
+a `1/2/3 tabs` mention instead (shown on every Workspaces-tab hint line,
+not just the Groups one, since the tabs are reachable from any of the
+three panes).
+
+The centered-overlay box-height-transition glitch documented above (a
+one-frame border-overlap artifact on a large height swing, self-heals
+immediately) also shows up on tab switches now, for the same underlying
+reason — switching into Custom Commands or Settings can be just as large a
+height change as opening the overlay version used to be. Same conclusion:
+cosmetic, not chased further, not specific to this feature.
 
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
@@ -416,7 +474,7 @@ before theming existed — plus Catppuccin Mocha, Dracula, Nord, Gruvbox Dark,
 Tokyo Night, Solarized Dark); `src/tui/ThemeContext.tsx` is a React context
 (`ThemeProvider`/`useTheme()`) that every color-bearing component in
 `App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is no
-prop-drilling. Switching is TUI-only, from the same Settings overlay (theme
+prop-drilling. Switching is TUI-only, from the Settings tab (theme
 is a field in `SettingsForm`, wired through an `onPreviewTheme` callback so
 changing the value applies it live via `App`'s `previewThemeName` state,
 before the field is submitted — canceling clears the preview and reverts to

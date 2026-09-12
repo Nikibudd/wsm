@@ -88,14 +88,14 @@ even as more managed pieces get added later. You get three choices:
 insert the line automatically, show it so you can paste it in yourself (if
 you'd rather review it first, or manage your rc file some other way), or
 skip for now — any of the three means you won't be asked again, but you can
-still toggle "Shell completion" on/off later from the Settings overlay (`s`
-from the Groups pane). Prefer to wire things up entirely by hand? `wsm
+still toggle "Shell completion" on/off later from the **Settings** tab
+(press `3`). Prefer to wire things up entirely by hand? `wsm
 completion zsh` / `wsm completion bash` and `wsm commands` print the exact
 scripts the managed setup uses.
 
 ### Custom commands
 
-Press `c` from the Groups pane to open **Custom Commands** — shell
+Press `2` to switch to the **Custom Commands** tab — shell
 functions available in every new terminal, independent of any workspace.
 Each has a name (must be a valid shell function name: letters, digits,
 underscore, hyphen, not starting with a digit or hyphen) and a command, which becomes
@@ -142,8 +142,11 @@ config for later.
 ## Configuring a workspace
 
 Run `wsm` with no arguments to launch the full-screen TUI (built with
-[Ink](https://github.com/vadimdemedes/ink)/React). It's a two-pane dashboard
-with three levels of drill-down: **Groups → Workspaces → Items**.
+[Ink](https://github.com/vadimdemedes/ink)/React). A tab bar across the top
+switches between three top-level views — `1` **Workspaces**, `2` **Custom
+Commands**, `3` **Settings** — from anywhere, so those two don't compete for
+the same mnemonic letters as everything else. Workspaces is a two-pane
+dashboard with three levels of drill-down: **Groups → Workspaces → Items**.
 
 - Left pane starts on **Groups** (e.g. "Work", "Personal") — workspaces
   without a group show up under "Ungrouped". `enter`/`→` on a group reveals
@@ -152,10 +155,9 @@ with three levels of drill-down: **Groups → Workspaces → Items**.
 - `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
   lets you change/move a workspace's group) · `c` from the workspace list
   duplicates the selected workspace (a form seeded from it, including its
-  items, prompting for a new name); `c` from the Groups pane instead opens
-  Custom Commands, and `c` from the items pane opens workspace settings ·
-  `d` delete (with confirmation, cascades to everything inside) · `s` from
-  the Groups pane opens Settings · `←`/`esc` back · `q` quit
+  items, prompting for a new name); `c` from the items pane instead opens
+  workspace settings · `d` delete (with confirmation, cascades to
+  everything inside) · `←`/`esc` back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,
     `open -a "MongoDB Compass" "mongodb://localhost:27017"`

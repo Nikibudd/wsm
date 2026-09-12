@@ -57,6 +57,60 @@ describe("App (TUI)", () => {
     unmount();
   });
 
+  test("1/2/3 switch tabs from anywhere, and the tab bar reflects which one is active", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    // Tab bar is always visible, showing all three regardless of which is active.
+    expect(lastFrame()).toContain("1 Workspaces");
+    expect(lastFrame()).toContain("2 Custom Commands");
+    expect(lastFrame()).toContain("3 Settings");
+    // Starts on the Workspaces tab.
+    expect(lastFrame()).toContain("No workspaces yet.");
+
+    stdin.write("2");
+    await flush();
+    expect(lastFrame()).toContain("Custom commands");
+    expect(lastFrame()).not.toContain("No workspaces yet.");
+
+    stdin.write("3");
+    await flush();
+    expect(lastFrame()).toContain("Closes current workspace(s) first");
+    expect(lastFrame()).not.toContain("Custom commands");
+
+    stdin.write("1");
+    await flush();
+    expect(lastFrame()).toContain("No workspaces yet.");
+    expect(lastFrame()).not.toContain("Closes current workspace(s) first");
+
+    unmount();
+  });
+
+  test("switching tabs and back preserves where you were in the Workspaces drill-down", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      "workspaces:\n  - name: acme-api\n    items: []\n",
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write(ENTER); // drill into the (Ungrouped) group -> workspaces pane
+    await flush();
+    expect(lastFrame()).toContain("acme-api");
+
+    stdin.write("3"); // switch away to Settings
+    await flush();
+    stdin.write("1"); // and back to Workspaces
+    await flush();
+
+    // Still on the workspaces pane (inside the group), not reset to Groups.
+    expect(lastFrame()).toContain("Groups › Ungrouped");
+
+    unmount();
+  });
+
   test("creates a single-folder (default layout) workspace end-to-end", async () => {
     const { stdin, unmount } = render(<App />);
     await flush();
@@ -315,11 +369,11 @@ describe("App (TUI)", () => {
     expect(copy.items).toEqual(original.items);
   });
 
-  test("pressing s from the groups pane opens Settings, and toggling+saving persists it", async () => {
+  test("pressing 3 switches to the Settings tab, and toggling+saving persists it", async () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("s");
+    stdin.write("3");
     await flush();
     expect(lastFrame()).toContain("Settings");
     expect(lastFrame()).toContain("Closes current workspace(s) first");
@@ -352,7 +406,7 @@ describe("App (TUI)", () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("s");
+    stdin.write("3");
     await flush();
     stdin.write(ENTER); // -> Dead sessions field
     await flush();
@@ -377,7 +431,7 @@ describe("App (TUI)", () => {
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("s");
+    stdin.write("3");
     await flush();
     stdin.write(ENTER); // -> Dead sessions field
     await flush();
@@ -397,11 +451,11 @@ describe("App (TUI)", () => {
     expect(themes.activeTheme).toBe("Default");
   });
 
-  test("pressing c from the groups pane opens Custom Commands, and adding one persists it", async () => {
+  test("pressing 2 switches to the Custom Commands tab, and adding one persists it", async () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     expect(lastFrame()).toContain("Custom commands");
     expect(lastFrame()).toContain("No custom commands yet.");
@@ -422,9 +476,6 @@ describe("App (TUI)", () => {
     expect(lastFrame()).toContain("logs");
     expect(lastFrame()).toContain("docker compose logs -f");
 
-    stdin.write(ESC); // close the screen
-    await flush();
-
     unmount();
     const config = readConfigYaml(tmpDir);
     expect(config.customCommands).toEqual([{ name: "logs", command: "docker compose logs -f" }]);
@@ -434,7 +485,7 @@ describe("App (TUI)", () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     stdin.write("a");
     await flush(); // -> Name field
@@ -468,7 +519,7 @@ customCommands:
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     expect(lastFrame()).toContain("logs");
 
@@ -511,7 +562,7 @@ customCommands:
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     stdin.write("a");
     await flush(); // -> Name field
@@ -564,7 +615,7 @@ customCommands:
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     stdin.write("a");
     await flush();
@@ -594,7 +645,7 @@ customCommands:
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     stdin.write("a");
     await flush();
@@ -637,7 +688,7 @@ customCommands:
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
     stdin.write("a");
     await flush();
@@ -679,7 +730,7 @@ customCommands:
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
 
-    stdin.write("c");
+    stdin.write("2");
     await flush();
 
     const frame = lastFrame() ?? "";
@@ -805,7 +856,7 @@ describe("Shell integration setup", () => {
     unmount();
   });
 
-  test("toggling autocompletion on from the Settings overlay installs it immediately", async () => {
+  test("toggling autocompletion on from the Settings tab installs it immediately", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, "config.yaml"),
@@ -815,7 +866,7 @@ describe("Shell integration setup", () => {
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("s");
+    stdin.write("3");
     await flush(); // -> "wsm open" field
     stdin.write(ENTER);
     await flush(); // -> "Dead sessions" field
@@ -839,7 +890,7 @@ describe("Shell integration setup", () => {
     expect(fs.readFileSync(wsmRcFile, "utf8")).toContain(completionFile);
   });
 
-  test("toggling autocompletion off from the Settings overlay removes only the completion file, leaving the shared rc pipe intact", async () => {
+  test("toggling autocompletion off from the Settings tab removes only the completion file, leaving the shared rc pipe intact", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, "config.yaml"),
@@ -855,7 +906,7 @@ describe("Shell integration setup", () => {
     const { stdin, unmount } = render(<App />);
     await flush();
 
-    stdin.write("s");
+    stdin.write("3");
     await flush();
     stdin.write(ENTER);
     await flush(); // -> Dead sessions
