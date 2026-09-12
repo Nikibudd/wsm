@@ -21,6 +21,7 @@ type Pane = "groups" | "workspaces" | "items";
 type Overlay =
   | { kind: "addWorkspace"; presetGroup?: string }
   | { kind: "editWorkspace"; workspaceName: string }
+  | { kind: "duplicateWorkspace"; workspaceName: string }
   | { kind: "itemForm"; workspaceName: string; itemIndex: number | null; presetSide?: ItemSide }
   | { kind: "confirmDeleteWorkspace"; workspaceName: string }
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
@@ -585,6 +586,11 @@ export function App() {
           setOverlay({ kind: "addWorkspace", presetGroup });
         } else if (input === "r" && wsIndex < maxIndex) {
           setOverlay({ kind: "editWorkspace", workspaceName: currentGroupWorkspaces[wsIndex]!.name });
+        } else if (input === "c" && wsIndex < maxIndex) {
+          setOverlay({
+            kind: "duplicateWorkspace",
+            workspaceName: currentGroupWorkspaces[wsIndex]!.name,
+          });
         } else if (input === "d" && wsIndex < maxIndex) {
           setOverlay({
             kind: "confirmDeleteWorkspace",
@@ -677,7 +683,7 @@ export function App() {
       return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · ● = open · q quit";
     }
     if (pane === "workspaces") {
-      return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · ● = open · q quit";
+      return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · q quit";
     }
     if (isSplit) {
       return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · q quit";
@@ -732,6 +738,42 @@ export function App() {
             pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
             flash(`Saved workspace "${name}"`);
+          }}
+          onCancel={() => setOverlay(null)}
+        />
+      ) : null;
+    } else if (overlay.kind === "duplicateWorkspace") {
+      const source = config.workspaces.find((w) => w.name === overlay.workspaceName);
+      overlayNode = source ? (
+        <WorkspaceForm
+          existingNames={config.workspaces.map((w) => w.name)}
+          initialValues={{
+            name: `${source.name}-copy`,
+            group: source.group ?? "",
+            layout: source.layout ?? "single",
+            cwd: source.cwd ?? "",
+            frontendCwd: source.frontendCwd ?? "",
+            backendCwd: source.backendCwd ?? "",
+          }}
+          title={`Duplicate workspace · ${source.name}`}
+          submitLabel="duplicate"
+          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+            const workspace: Workspace = {
+              name,
+              group: group || undefined,
+              layout: layout === "split" ? "split" : undefined,
+              cwd: layout === "single" ? cwd || undefined : undefined,
+              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
+              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
+              items: source.items.map((item) => ({ ...item })),
+            };
+            setConfig((prev) => ({
+              ...prev,
+              workspaces: [...prev.workspaces, workspace],
+            }));
+            pendingSelect.current = { type: "workspace", name };
+            setOverlay(null);
+            flash(`Duplicated workspace as "${name}"`);
           }}
           onCancel={() => setOverlay(null)}
         />

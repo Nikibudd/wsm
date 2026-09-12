@@ -98,8 +98,10 @@ with three levels of drill-down: **Groups → Workspaces → Items**.
   the workspaces inside it; `←`/`esc` goes back up a level. A green `●` marks
   a group or workspace that's currently open (per `wsm status`).
 - `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
-  lets you change/move a workspace's group) · `c` workspace settings (from
-  the items pane) · `d` delete (with confirmation, cascades to everything
+  lets you change/move a workspace's group) · `c` from the workspace list
+  duplicates the selected workspace (a form seeded from it, including its
+  items, prompting for a new name); `c` from the items pane instead opens
+  workspace settings · `d` delete (with confirmation, cascades to everything
   inside) · `←`/`esc` back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,

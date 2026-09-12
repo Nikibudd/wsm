@@ -105,6 +105,24 @@ frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
 in which case each item picks a `side`. Single-folder is always the default;
 `layout` is omitted from saved config entirely unless split is chosen.
 
+**Duplicating a workspace** (`c` from the workspace list, i.e. `WorkspaceListPane`
+— a different overlay from the `c` in the items pane, which opens workspace
+settings) reuses `WorkspaceForm` rather than a bespoke component: it's the
+same field set (group/name/layout/cwd or frontendCwd+backendCwd) with a new
+optional `initialValues` prop to seed those fields from the source workspace
+and a `title`/`submitLabel` override, kept deliberately separate from the
+`existing` prop — `existing` is identity ("this literal workspace is being
+edited," so keeping its own name on submit is fine), whereas a duplicate is a
+brand-new workspace that must get a name distinct from every existing one,
+including the source's — reusing `existing` for this would have silently
+punched a hole in that check. The name field is prefilled `"<source>-copy"`
+as a starting point, not auto-uniquified further — if `-copy` is already
+taken, the existing "name already exists" validation catches it like any
+other add. Items are copied with a shallow per-item spread
+(`source.items.map((item) => ({ ...item }))`) so the two workspaces don't
+share item object references; nothing about `WorkspaceItem` is deeply nested
+enough to need more than that.
+
 Tool-wide behavior (as opposed to per-workspace config) lives in an optional
 top-level `settings:` key in the same `config.yaml` — not a separate file.
 `config.getSettings(config)` merges it with defaults (`defaultClose: true`,

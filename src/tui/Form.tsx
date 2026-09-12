@@ -324,22 +324,29 @@ export function WorkspaceForm({
   existing,
   existingNames,
   presetGroup,
+  initialValues,
+  title,
+  submitLabel = "save",
   onSubmit,
   onCancel,
 }: {
   existing?: Workspace;
   existingNames: string[];
   presetGroup?: string;
+  /** Seeds field values without the identity-based "same name is fine" exception `existing` gets — used for duplicating a workspace, where the new name must differ from every existing one, including the source's. */
+  initialValues?: Partial<WorkspaceFormResult>;
+  title?: string;
+  submitLabel?: string;
   onSubmit: (result: WorkspaceFormResult) => void;
   onCancel: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({
-    group: existing?.group ?? presetGroup ?? "",
-    name: existing?.name ?? "",
-    layout: existing?.layout ?? "single",
-    cwd: existing?.cwd ?? "",
-    frontendCwd: existing?.frontendCwd ?? "",
-    backendCwd: existing?.backendCwd ?? "",
+    group: existing?.group ?? initialValues?.group ?? presetGroup ?? "",
+    name: existing?.name ?? initialValues?.name ?? "",
+    layout: existing?.layout ?? initialValues?.layout ?? "single",
+    cwd: existing?.cwd ?? initialValues?.cwd ?? "",
+    frontendCwd: existing?.frontendCwd ?? initialValues?.frontendCwd ?? "",
+    backendCwd: existing?.backendCwd ?? initialValues?.backendCwd ?? "",
   });
   const [error, setError] = useState("");
 
@@ -390,11 +397,11 @@ export function WorkspaceForm({
 
   return (
     <Form
-      title={existing ? `Edit workspace · ${existing.name}` : "New workspace"}
+      title={title ?? (existing ? `Edit workspace · ${existing.name}` : "New workspace")}
       fields={fields}
       values={values}
       error={error}
-      submitLabel="save"
+      submitLabel={submitLabel}
       onChange={(k, updater) => {
         setError("");
         setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
