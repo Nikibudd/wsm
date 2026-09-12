@@ -262,6 +262,57 @@ describe("App (TUI)", () => {
     expect(config.workspaces.map((w: any) => w.name)).toEqual(["c"]);
   });
 
+  test("duplicating a workspace clones its items under a new name, leaving the original untouched", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: acme-api
+    group: Work
+    cwd: /tmp/acme-api
+    items:
+      - name: editor
+        type: app
+        launch: code .
+        close: osascript -e 'tell application "Visual Studio Code" to quit'
+      - name: docker
+        type: command
+        launch: docker compose up -d
+        close: docker compose down
+`,
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write(ENTER); // drill into the "Work" group
+    await flush();
+    stdin.write("c"); // duplicate the selected workspace
+    await flush();
+
+    expect(lastFrame()).toContain("Duplicate workspace");
+    expect(lastFrame()).toContain("acme-api-copy");
+
+    stdin.write(ENTER); // group field, prefilled "Work" -> keep it
+    await flush();
+    stdin.write(ENTER); // name field, prefilled "acme-api-copy" -> keep it
+    await flush();
+    stdin.write(ENTER); // layout select, prefilled "single" -> keep it
+    await flush();
+    stdin.write(ENTER); // cwd field, prefilled "/tmp/acme-api" -> keep it, submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.workspaces).toHaveLength(2);
+    const original = config.workspaces.find((w: any) => w.name === "acme-api");
+    const copy = config.workspaces.find((w: any) => w.name === "acme-api-copy");
+    expect(original.items).toHaveLength(2);
+    expect(copy).toMatchObject({ group: "Work", cwd: "/tmp/acme-api" });
+    expect(copy.items).toEqual(original.items);
+  });
+
   test("pressing s from the groups pane opens Settings, and toggling+saving persists it", async () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     await flush();
