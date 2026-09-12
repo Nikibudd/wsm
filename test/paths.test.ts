@@ -14,6 +14,8 @@ import {
   sanitizePathSegment,
   getCompletionScriptPath,
   getRcFilePath,
+  getWsmRcScriptPath,
+  getCustomCommandsScriptPath,
 } from "../src/paths.js";
 
 describe("paths", () => {
@@ -149,6 +151,21 @@ describe("paths", () => {
       process.env.WSM_CONFIG_DIR = "/tmp/wsm-completion-test";
       expect(getCompletionScriptPath("zsh")).toBe(path.join("/tmp/wsm-completion-test", "completion.zsh"));
       expect(getCompletionScriptPath("bash")).toBe(path.join("/tmp/wsm-completion-test", "completion.bash"));
+    });
+  });
+
+  describe("getWsmRcScriptPath", () => {
+    test("is a shell-specific umbrella file under the config dir", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-rc-test";
+      expect(getWsmRcScriptPath("zsh")).toBe(path.join("/tmp/wsm-rc-test", "wsmrc.zsh"));
+      expect(getWsmRcScriptPath("bash")).toBe(path.join("/tmp/wsm-rc-test", "wsmrc.bash"));
+    });
+  });
+
+  describe("getCustomCommandsScriptPath", () => {
+    test("is one shared file under the config dir, not per-shell", () => {
+      process.env.WSM_CONFIG_DIR = "/tmp/wsm-commands-test";
+      expect(getCustomCommandsScriptPath()).toBe(path.join("/tmp/wsm-commands-test", "commands.sh"));
     });
   });
 

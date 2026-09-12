@@ -90,6 +90,27 @@ export function getCompletionScriptPath(shell: CompletionShell): string {
   return path.join(getConfigDir(), `completion.${shell}`);
 }
 
+// The managed umbrella file the rc file actually sources (one-time edit) —
+// itself sources completion.<shell> and commands.sh. Per-shell because it
+// has to reference that shell's own completion.<shell> file, even though its
+// own syntax (plain `[ -f ... ] && source ...` guards) doesn't otherwise
+// differ between bash and zsh. This indirection is what lets wsm add more
+// managed files in the future (like commands.sh today) without ever asking
+// for a second rc-file edit — see AGENTS.md.
+export function getWsmRcScriptPath(shell: CompletionShell): string {
+  return path.join(getConfigDir(), `wsmrc.${shell}`);
+}
+
+// Custom shell functions generated from config.yaml's `customCommands`
+// (`wsm commands`, evaluated fresh on every shell start, same "stays in
+// sync automatically" property completion.ts's scripts already have). One
+// shared file, not per-shell like completion.ts, because a plain shell
+// function definition (`name() { ...; }`) is valid POSIX syntax in both
+// bash and zsh — there's no shell-specific API split to account for here.
+export function getCustomCommandsScriptPath(): string {
+  return path.join(getConfigDir(), "commands.sh");
+}
+
 // WSM_RC_FILE overrides which rc file installCompletion touches — used for
 // isolated testing, same purpose as WSM_CONFIG_DIR. Read live, same reason.
 //

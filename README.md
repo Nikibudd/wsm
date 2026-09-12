@@ -71,6 +71,7 @@ wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
 wsm update              # downloads and installs the latest release, in place
 wsm completion <shell>  # prints a completion script for bash or zsh (usually set up for you, see below)
+wsm commands            # prints shell functions for your configured custom commands (see below)
 ```
 
 `wsm update` only works on a real release install (see "From a release"
@@ -78,14 +79,30 @@ above) — it refuses to run on a development build (`wsmdev`), which updates
 via `npm run build` instead.
 
 The first time you launch the TUI (`wsm`, no args), it offers to set up
-tab-completion for bash/zsh. Accepting adds one line to your shell rc file
-(`~/.zshrc`/`~/.bashrc`) that sources a small file wsm manages — nothing
-else about your rc file ever needs to change after that, including on
-future `wsm update`s. Declined it, or want to turn it on/off later? Toggle
-"Shell completion" from the Settings overlay (`s` from the Groups pane).
-Prefer to wire it up yourself instead of going through the prompt? `wsm
-completion zsh` / `wsm completion bash` prints the completion script
-directly, the same one the automatic setup uses.
+**shell integration**: tab-completion for bash/zsh, plus any custom commands
+you define (see below). Accepting adds one line to your shell rc file
+(`~/.zshrc`/`~/.bashrc`) that sources a small "wsmrc" file wsm manages;
+that file in turn sources the completion script and your custom commands
+separately, so nothing about the rc file itself ever needs to change again,
+even as more managed pieces get added later. You get three choices:
+insert the line automatically, show it so you can paste it in yourself (if
+you'd rather review it first, or manage your rc file some other way), or
+skip for now — any of the three means you won't be asked again, but you can
+still toggle "Shell completion" on/off later from the Settings overlay (`s`
+from the Groups pane). Prefer to wire things up entirely by hand? `wsm
+completion zsh` / `wsm completion bash` and `wsm commands` print the exact
+scripts the managed setup uses.
+
+### Custom commands
+
+Press `c` from the Groups pane to open **Custom Commands** — shell
+functions available in every new terminal, independent of any workspace
+(e.g. a `logs` shortcut for `docker compose logs -f`, callable as
+`logs -n 50` since extra arguments are forwarded through). Each has a name
+(must be a valid shell function identifier: letters, digits, underscore,
+not starting with a digit) and a command. They only take effect in new
+shells once shell integration's rc line is in place (see above) — adding
+one before that just saves it to config for later.
 
 ## Configuring a workspace
 
@@ -100,9 +117,10 @@ with three levels of drill-down: **Groups → Workspaces → Items**.
 - `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
   lets you change/move a workspace's group) · `c` from the workspace list
   duplicates the selected workspace (a form seeded from it, including its
-  items, prompting for a new name); `c` from the items pane instead opens
-  workspace settings · `d` delete (with confirmation, cascades to everything
-  inside) · `←`/`esc` back · `q` quit
+  items, prompting for a new name); `c` from the Groups pane instead opens
+  Custom Commands, and `c` from the items pane opens workspace settings ·
+  `d` delete (with confirmation, cascades to everything inside) · `s` from
+  the Groups pane opens Settings · `←`/`esc` back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,
     `open -a "MongoDB Compass" "mongodb://localhost:27017"`

@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
-import type { ItemSide, ItemType, Settings, Workspace, WorkspaceItem, WorkspaceLayout } from "../types.js";
+import { isValidCustomCommandName } from "../customCommands.js";
+import type {
+  CustomCommand,
+  ItemSide,
+  ItemType,
+  Settings,
+  Workspace,
+  WorkspaceItem,
+  WorkspaceLayout,
+} from "../types.js";
 import { useTheme } from "./ThemeContext.js";
 
 export interface FieldOption {
@@ -488,7 +497,7 @@ export function SettingsForm({
         defaultClose: values.defaultClose === "close",
         autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
         autocomplete: completionAvailable ? values.autocomplete === "on" : existing.autocomplete,
-        autocompletePrompted: existing.autocompletePrompted,
+        shellIntegrationPrompted: existing.shellIntegrationPrompted,
       },
       theme: values.theme,
     });
@@ -541,6 +550,66 @@ export function RenameGroupForm({
   return (
     <Form
       title={`Rename group "${groupName}"`}
+      fields={fields}
+      values={values}
+      error={error}
+      submitLabel="save"
+      onChange={(k, updater) => {
+        setError("");
+        setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));
+      }}
+      onSubmit={handleSubmit}
+      onCancel={onCancel}
+    />
+  );
+}
+
+export function CustomCommandForm({
+  existing,
+  existingNames,
+  onSubmit,
+  onCancel,
+}: {
+  existing?: CustomCommand;
+  existingNames: string[];
+  onSubmit: (command: CustomCommand) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState<Record<string, string>>({
+    name: existing?.name ?? "",
+    command: existing?.command ?? "",
+  });
+  const [error, setError] = useState("");
+
+  const fields: FieldDef[] = [
+    { key: "name", label: "Name", kind: "text", placeholder: "e.g. logs" },
+    { key: "command", label: "Command", kind: "text", placeholder: "docker compose logs -f" },
+  ];
+
+  const handleSubmit = () => {
+    const name = values.name.trim();
+    if (!name) {
+      setError("Name is required");
+      return;
+    }
+    if (!isValidCustomCommandName(name)) {
+      setError("Name must be a valid shell function name (letters, digits, underscore; can't start with a digit)");
+      return;
+    }
+    if (name !== existing?.name && existingNames.includes(name)) {
+      setError("A custom command with that name already exists");
+      return;
+    }
+    if (!values.command.trim()) {
+      setError("Command is required");
+      return;
+    }
+    onSubmit({ name, command: values.command.trim() });
+  };
+
+  return (
+    <Form
+      title={existing ? `Edit command · ${existing.name}` : "New custom command"}
       fields={fields}
       values={values}
       error={error}

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { openWorkspace, closeWorkspaces, statusReport, statusJson, pruneDeadSessions } from "./launcher.js";
-import { loadConfig, workspaceNames, getSettings } from "./config.js";
+import { loadConfig, workspaceNames, getSettings, getCustomCommands } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
 import { bashCompletionScript, zshCompletionScript } from "./completion.js";
-import { refreshInstalledCompletion } from "./completionInstall.js";
+import { customCommandsScript } from "./customCommands.js";
+import { refreshInstalledCompletion } from "./shellIntegration.js";
 import { fetchLatestRelease, downloadAsset, canSelfUpdate, installUpdate } from "./update.js";
 // Real ESM JSON import, not a hardcoded version string — this also has to
 // work standalone-bundled (release/wsm.mjs ships with no package.json next
@@ -106,6 +107,14 @@ program
       console.error(`Unsupported shell "${shell}". Expected "bash" or "zsh".`);
       process.exitCode = 1;
     }
+  });
+
+program
+  .command("commands")
+  .description("Print shell function definitions for configured custom commands (eval it in your rc file)")
+  .action(() => {
+    const config = loadConfig();
+    console.log(customCommandsScript(getCustomCommands(config)));
   });
 
 program
