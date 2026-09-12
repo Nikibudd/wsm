@@ -335,6 +335,13 @@ arrow-key-only movement, which doesn't otherwise touch `values` and so
 wouldn't cause one on its own — inserting/deleting text doesn't need this,
 since the accompanying `onChange` call already triggers a render.
 
+The "am I currently in edit mode" flag needs the exact same ref treatment,
+for the exact same reason — see the Lessons learned entry below for the
+real bug this caused before `multilineEditingRef` existed (a large paste
+could partially process against a stale "not editing yet" read and corrupt
+itself). `multilineEditing` (`useState`) still exists, purely to drive
+rendering, kept in sync via a small `setEditing` helper that writes both.
+
 Hand-authoring a multi-line body directly in `config.yaml` (a YAML block
 scalar) still works exactly as before and is just as valid a path — the
 round trip through `saveConfig`/`loadConfig` (plain `js-yaml` `dump`/`load`,
@@ -466,6 +473,45 @@ banner, etc.) before the actual command's output — don't mistake that for
 the log capture being broken.
 
 ## Lessons learned (don't regress these)
+
+- **A multiline `Form` field's "am I currently editing" check must be read
+  from a ref, never from the `useState` value, inside `useInput`'s
+  handler.** Real bug, found by actually pasting a large (~25-line)
+  multi-line function into the Custom Commands' Command field over a real
+  pty — a case `ink-testing-library`'s `stdin.write()` couldn't reproduce at
+  all (it delivers a whole string, embedded newlines included, as one
+  atomic event; a real terminal paste does not, and Ink processes it across
+  several of its own internal render cycles). Before the fix, `Form.tsx`'s
+  `useInput` decided "not editing yet vs. already editing" by reading the
+  `multilineEditing` `useState` value directly — some portion of a large
+  paste got processed while that read was still stale (Ink hadn't yet
+  committed the render that would have made it `true`), so those characters
+  fell through to the *not-yet-editing* branch instead: an embedded
+  newline there calls `advanceOrSubmit` (submit/close the form, mid-paste)
+  instead of inserting a line, and that branch's `multilineCursor.current =
+  (values[field.key] ?? "").length` line — meant to run exactly once, the
+  moment editing starts — re-ran on every one of those stale passes,
+  yanking the cursor back to the same stale position each time. Net effect:
+  large pastes exited the form partway through and saved scrambled,
+  merged-together lines — while a short paste (a handful of lines) or
+  ordinary typing never triggered it, since those fit in however much a
+  single Ink render cycle actually covers. Fixed by adding
+  `multilineEditingRef` (a ref) as the thing `useInput` actually branches
+  on, with the `useState` twin (`multilineEditing`) demoted to feeding
+  render output only (color, hint text) — mutating a ref is visible
+  immediately to the very next call, however Ink chooses to schedule
+  renders in between, exactly the same reasoning `multilineCursor` (see
+  Architecture above) already relied on ref for. Verified fixed against the
+  exact real-pty repro that showed the corruption; the underlying data is
+  now byte-for-byte correct even though Ink's on-screen repaint can still
+  visibly stutter for the duration of a very large paste — that residual
+  stutter is cosmetic (self-heals once the burst ends) and wasn't chased
+  further, same category as the overlay-transition glitch documented above.
+  **No Jest regression test exists for this** — deliberately: the bug is
+  about Ink's real internal render scheduling under a genuinely large,
+  fast input burst, which `ink-testing-library` does not reproduce (confirmed
+  by trying); rely on a real-pty check (a large multi-line paste into a
+  multiline field) if you touch this logic again.
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not
   `shell: true`.** `child_process`'s `shell: true` uses a bare `/bin/sh`,

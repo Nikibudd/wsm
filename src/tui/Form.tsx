@@ -93,7 +93,27 @@ export function Form({
   // instead — esc is the only way back out, to normal per-field navigation.
   // Reset on every focus change so landing on (or back on) a multiline
   // field always starts in the non-editing state, never mid-edit.
+  //
+  // The *decision* of which mode we're in is made from a ref
+  // (multilineEditingRef), not the useState value below — a large paste
+  // delivers many keystrokes across several of Ink's internal render
+  // cycles, and this needs to read as true the instant the first character
+  // of the paste sets it, not whenever React next happens to commit a
+  // render. Reading the state value here instead was a real bug: with a
+  // long paste, some of it would still be processed against a stale
+  // "not editing yet" view, so an embedded newline could hit `advanceOrSubmit`
+  // (closing/submitting the form mid-paste) instead of inserting a line,
+  // and the "start editing" branch re-reading `values[field.key]` on every
+  // one of those stale passes reset the cursor back to the same stale
+  // position each time — together corrupting the pasted text into merged,
+  // out-of-order lines. `multilineEditing` (state) still exists purely to
+  // drive rendering (color, hint text), kept in sync wherever the ref changes.
+  const multilineEditingRef = useRef(false);
   const [multilineEditing, setMultilineEditing] = useState(false);
+  const setEditing = (next: boolean) => {
+    multilineEditingRef.current = next;
+    setMultilineEditing(next);
+  };
   // A flat character offset into the multiline value (see the two helpers
   // above). This is a ref, not state: Ink can deliver several keystrokes
   // from one stdin chunk before a render commits, and inserting/deleting
@@ -119,7 +139,7 @@ export function Form({
   }, [fields.length, focusIndex]);
 
   useEffect(() => {
-    setMultilineEditing(false);
+    setEditing(false);
     multilineCursor.current = 0;
   }, [focusIndex]);
 
@@ -174,9 +194,9 @@ export function Form({
   useInput((input, key) => {
     const field = fields[focusIndex];
 
-    if (field?.kind === "multiline" && multilineEditing) {
+    if (field?.kind === "multiline" && multilineEditingRef.current) {
       if (key.escape) {
-        setMultilineEditing(false);
+        setEditing(false);
         return;
       }
       if (key.return) {
@@ -239,7 +259,7 @@ export function Form({
         return;
       }
       multilineCursor.current = (values[field.key] ?? "").length;
-      setMultilineEditing(true);
+      setEditing(true);
       applyMultilineKeystroke(field.key, input, key);
       return;
     }
