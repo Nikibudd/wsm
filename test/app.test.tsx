@@ -626,6 +626,43 @@ customCommands:
     ]);
   });
 
+  // Real bug: some terminals send a pasted line break as "\r" rather than
+  // forwarding the clipboard's literal "\n" — indistinguishable, from the
+  // app's side, from someone rapidly typing and pressing Enter (which also
+  // sends "\r"). When that "\r" arrives folded into a larger `input` string
+  // (a paste, not a single discrete keypress), it isn't a bare `key.return`
+  // event, so it was landing in the value as a literal "\r" character
+  // instead of being normalized to "\n" like every other line break.
+  test("a pasted line break arriving as a literal \\r (not a discrete return keypress) is treated as a newline", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("c");
+    await flush();
+    stdin.write("a");
+    await flush();
+    stdin.write("greet");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Command field
+
+    // One input event containing embedded "\r"s, the way a paste can
+    // arrive — not three separate ENTER keystrokes.
+    stdin.write("line one\rline two\rline three");
+    await flush();
+    stdin.write(ESC);
+    await flush();
+    stdin.write(ENTER); // submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.customCommands).toEqual([
+      { name: "greet", command: "line one\nline two\nline three" },
+    ]);
+  });
+
   test("the Custom Commands list shows only the first line of a multi-line command, not the raw embedded newlines", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(

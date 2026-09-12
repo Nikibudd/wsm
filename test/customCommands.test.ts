@@ -33,16 +33,22 @@ describe("customCommands", () => {
     // the user's own $1/$@ handling) work at all. A simple passthrough
     // command just includes "$@" itself, same as writing a real shell
     // function by hand.
-    test("wraps each command as the literal, indented function body", () => {
+    test("wraps each command as the literal function body", () => {
       const script = customCommandsScript([
         { name: "logs", command: 'docker compose logs -f "$@"' },
         { name: "psql", command: "psql -h localhost mydb" },
       ]);
-      expect(script).toContain('logs() {\n  docker compose logs -f "$@"\n}');
-      expect(script).toContain("psql() {\n  psql -h localhost mydb\n}");
+      expect(script).toContain('logs() {\ndocker compose logs -f "$@"\n}');
+      expect(script).toContain("psql() {\npsql -h localhost mydb\n}");
     });
 
-    test("preserves a multi-line body, indenting every non-blank line and leaving blank lines empty", () => {
+    // Deliberately *not* indented: an earlier version added a couple of
+    // spaces to every line for readability, but that's not safe for
+    // arbitrary shell — it silently breaks a heredoc's terminator (which
+    // must be unindented, unless using `<<-`) and would insert whitespace
+    // into any multi-line string literal's continuation lines. Correctness
+    // beats cosmetics here; the body is embedded byte-for-byte.
+    test("preserves a multi-line body byte-for-byte, with no added indentation", () => {
       const script = customCommandsScript([
         {
           name: "greet",
@@ -50,8 +56,25 @@ describe("customCommands", () => {
         },
       ]);
       expect(script).toBe(
-        'greet() {\n  local who="${1:-world}"\n\n  if [ -n "$who" ]; then\n    echo "hi $who"\n  fi\n}\n',
+        'greet() {\nlocal who="${1:-world}"\n\nif [ -n "$who" ]; then\n  echo "hi $who"\nfi\n}\n',
       );
+    });
+
+    // Regression for the indentation bug above: a heredoc's terminator
+    // has to land at the exact indentation the body used (here, none), or
+    // the shell keeps reading past it looking for a real terminator.
+    test("keeps a heredoc's terminator usable, so the generated function is valid shell", () => {
+      const command = [
+        "result=$(osascript <<APPLESCRIPT",
+        'tell application "Ghostty"',
+        "  return \"ok\"",
+        "end tell",
+        "APPLESCRIPT",
+        ")",
+        'echo "$result"',
+      ].join("\n");
+      const script = customCommandsScript([{ name: "ghostty-close-here", command }]);
+      expect(script).toBe(`ghostty-close-here() {\n${command}\n}\n`);
     });
 
     test("returns an empty string for no commands", () => {
@@ -68,7 +91,7 @@ describe("customCommands", () => {
         { name: "ok", command: "echo fine" },
       ]);
       expect(script).not.toContain("2bad");
-      expect(script).toContain("ok() {\n  echo fine\n}");
+      expect(script).toContain("ok() {\necho fine\n}");
     });
   });
 });

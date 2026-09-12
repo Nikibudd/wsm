@@ -186,8 +186,17 @@ export function Form({
       return;
     }
     if (input) {
-      onChange(fieldKey, (prev) => prev.slice(0, pos) + input + prev.slice(pos));
-      multilineCursor.current = pos + input.length;
+      // A discrete Enter keypress arrives as key.return with empty input,
+      // handled by the callers below — but a pasted line break often
+      // doesn't: some terminals send "\r" for a pasted newline (the same
+      // byte a real Enter key sends), and when it's folded into a larger
+      // `input` string rather than its own isolated keypress, Ink reports
+      // it as plain text, not key.return. Normalizing it here means a
+      // paste's line breaks land as "\n" the same as a discrete Enter does,
+      // regardless of which byte the source terminal happened to send.
+      const text = input.replace(/\r\n?/g, "\n");
+      onChange(fieldKey, (prev) => prev.slice(0, pos) + text + prev.slice(pos));
+      multilineCursor.current = pos + text.length;
     }
   };
 

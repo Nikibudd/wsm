@@ -220,9 +220,19 @@ independent of any workspace — e.g. a `logs` shortcut for `docker compose
 logs -f "$@"`, or a full multi-line function pulled out of someone's rc
 file to stop it cluttering every project's config. `customCommandsScript
 (commands)` generates one POSIX shell function per entry, wrapping `command`
-as the literal, indented function *body* — `name() {\n  <command>\n}`, via
-the internal `indentBody` helper (two-space indent on every non-blank line,
-blank lines left empty rather than padded). Deliberately **no** automatic
+as the literal function *body*, embedded byte-for-byte — `name() {\n
+<command>\n}`. This used to re-indent the body (two spaces on every
+non-blank line) for readability — removed as a real bug, not just a style
+choice: indenting an arbitrary shell body isn't safe in general, since it
+silently breaks a heredoc's terminator (which must land at an exact
+column, unindented unless the heredoc used `<<-`) and would inject
+whitespace into any multi-line string literal's continuation lines. Found
+via a real custom command that used a heredoc (`osascript <<APPLESCRIPT
+...APPLESCRIPT`, pulled from an actual rc file) — the indented terminator
+no longer matched, so the shell kept reading past it looking for a real
+one, corrupting the rest of the generated script; `zsh -n`/`bash -n`
+against `wsm commands`' output is what caught it. Regression-tested in
+`test/customCommands.test.ts` with exactly that heredoc shape. Deliberately **no** automatic
 "$@" forwarding: earlier versions of this feature auto-appended it after a
 single command line, but that only works for a bare one-liner — it breaks
 immediately for a real multi-line body (appending `"$@"` after a body's
@@ -512,6 +522,30 @@ the log capture being broken.
   fast input burst, which `ink-testing-library` does not reproduce (confirmed
   by trying); rely on a real-pty check (a large multi-line paste into a
   multiline field) if you touch this logic again.
+
+- **A pasted line break can arrive as a literal `"\r"` inside `input`,
+  not as a discrete `key.return` keypress — the multiline field's insert
+  path has to normalize it.** Found immediately after the bug above, from
+  the *same* real paste, once that one was fixed: the corrupted-merged-
+  lines symptom was gone, but the saved value now had literal `\r`
+  characters where line breaks should be — a completely different failure
+  mode from the same repro, meaning fixing the first bug uncovered a
+  second one sitting behind it. Some terminals send a pasted line break as
+  `"\r"` (the same byte a real Enter key sends) rather than forwarding the
+  clipboard's literal `"\n"` — indistinguishable, from the terminal's own
+  point of view, from someone rapidly typing text and pressing Enter after
+  each line. When that `"\r"` lands folded into a longer `input` string
+  (part of a paste) rather than arriving as its own isolated keypress, Ink
+  reports it as plain text with `key.return` unset, so it never reached the
+  discrete-Enter handling that already turns a real `key.return` into
+  `"\n"`. Fixed in `applyMultilineKeystroke`'s plain-character branch by
+  normalizing `input.replace(/\r\n?/g, "\n")` before inserting — covers a
+  lone `"\r"` and a `"\r\n"` pair the same way, whatever the source
+  terminal sent. Unlike the bug above, **this one is fully covered by a
+  Jest test** (`app.test.tsx`, "arrives as a literal \r") — the normalization
+  is about the *content* of a given `input` string, not about Ink's render
+  timing, so `ink-testing-library`'s `stdin.write()` (which delivers a whole
+  string as one atomic event) reproduces it exactly like a real terminal would.
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not
   `shell: true`.** `child_process`'s `shell: true` uses a bare `/bin/sh`,
