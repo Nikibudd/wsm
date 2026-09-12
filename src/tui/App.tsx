@@ -501,8 +501,7 @@ function CustomCommandsScreen({
       <Text dimColor>
         Shell functions available in every new terminal (via `wsm commands`), independent of any
         workspace. The command is the exact function body (add "$@" yourself for passthrough args) —
-        for a multi-line body, edit config.yaml's customCommands directly, since this field is
-        single-line only.
+        type into the Command field to edit it (enter adds a line, esc stops editing).
       </Text>
       <Box height={1} />
       {commands.length === 0 ? (
@@ -510,15 +509,21 @@ function CustomCommandsScreen({
       ) : (
         commands.map((c, i) => {
           const selected = i === selectedIndex;
+          const lines = c.command.split("\n");
+          const preview = lines[0] + (lines.length > 1 ? " …" : "");
           return (
             <Box key={c.name} flexDirection="column" marginBottom={1}>
               <Text {...rowStyle(selected, theme)}>
                 {selected ? "› " : "  "}
                 {c.name}
               </Text>
+              {/* Only the first line, truncated: a multi-line command's raw
+                  "\n" would otherwise split this into extra rows that lose
+                  the leading indent, breaking the box's layout (confirmed
+                  via a real pty run, not just this test harness). */}
               <Text dimColor wrap="truncate-end">
                 {"    "}
-                {c.command}
+                {preview}
               </Text>
             </Box>
           );

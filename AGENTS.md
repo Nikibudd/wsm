@@ -247,18 +247,97 @@ unlike completion.<shell>, because a plain shell function definition has no
 bash/zsh syntax split to account for — there's nothing here like
 completion's `compgen`/`compdef` API difference.
 
-The TUI's `CustomCommandForm` Command field is single-line only (`Form`'s
-text fields build their value off raw keystrokes, where `key.return` always
-means "next field/submit," never "insert a newline" — see the
-`ink-text-input` lesson below), so a genuinely multi-line body has to be
-hand-authored directly in `config.yaml` as a YAML block scalar; the round
-trip through `saveConfig`/`loadConfig` (plain `js-yaml` `dump`/`load`, no
-special handling needed) preserves the embedded newlines exactly, verified
-in `test/config.test.ts`. The TUI is still the easy path for ordinary
-one-line commands — this is a deliberate "simple case stays simple, complex
-case is still possible" split, not a missing feature; a real multi-line
-textarea field would be a much larger change to `Form.tsx`'s keystroke
-model for a need that, so far, hand-editing config.yaml already covers.
+The TUI's `CustomCommandForm` Command field is a real, multi-line editor —
+`Form.tsx`'s `FieldDef.kind` gained a third value, `"multiline"`, alongside
+`"text"`/`"select"`. This went through two designs before landing:
+
+1. First, the field was plain `"text"` and anything multi-line had to be
+   hand-authored in `config.yaml`, reasoning that a real editor would be a
+   much larger change to `Form`'s keystroke model. In practice the only way
+   to add a newline was pasting one in, which "worked" only by accident (a
+   paste containing raw `\n` bytes gets appended into the value like any
+   other input) and was fragile enough to produce doubled blank lines.
+2. Then, a `"multiline"` kind was added where `key.tab` (a no-op everywhere
+   else) meant "save," freeing `key.return` to always mean "insert a
+   newline" on this one field. This worked but was rejected on UX grounds:
+   it made `enter`'s meaning inconsistent depending on which field had
+   focus, for no reason visible to someone just using the form.
+
+The field is **modal** instead: `key.return` and `key.escape` mean the same
+thing they do on every other field — advance-or-submit, and cancel the
+form — *until* you actually start typing into it. Typing anything else
+(a character, backspace, ctrl+u) flips a per-form `multilineEditing` state
+true and applies that same keystroke as the first edit, rather than
+requiring a separate "start editing" key. From then on, within this one
+field, `key.return` inserts a literal `"\n"` instead of advancing, and
+`key.escape` exits back to the non-editing state (not canceling the form)
+instead of the global cancel — so `esc` then `enter` is "stop editing, now
+save." `applyMultilineKeystroke` holds the character-editing logic (append/
+backspace/ctrl+u) shared by both states, since only what enter/esc *do*
+differs between them, not how a character gets typed. `multilineEditing`
+resets to `false` on every focus change, so arriving at (or back at) the
+field always starts in the non-editing state. Every other field kind
+(`ItemForm`/`WorkspaceForm`/`RenameGroupForm`/`SettingsForm`'s `"text"`/
+`"select"` fields) is completely untouched by this — `key.tab` reverted to
+being a no-op everywhere, including on an unedited multiline field, exactly
+as it always was.
+
+Rendering follows the same state: the value's text (and its cursor block)
+render in the form's accent color only while `multilineEditing` is true for
+the focused field, plain `theme.text` otherwise — a real color change, not
+just the hint line, so "am I currently typing into this" has an answer
+that's visible without reading the footer. The value itself splits on
+`"\n"` into one `<Text>` per line inside a `<Box flexDirection="column">`,
+with the cursor block only ever on the last line (this editor is still
+append/backspace-at-end only, like every other field — no interior cursor
+movement, for any field kind, today).
+
+Hand-authoring a multi-line body directly in `config.yaml` (a YAML block
+scalar) still works exactly as before and is just as valid a path — the
+round trip through `saveConfig`/`loadConfig` (plain `js-yaml` `dump`/`load`,
+no special handling needed) preserves the embedded newlines exactly,
+verified in `test/config.test.ts`. But it's no longer the *only* path for
+anything beyond a single line, which was the actual point of the feature
+generalizing past single-line passthrough commands in the first place.
+
+`CustomCommandsScreen`'s list view needed a matching fix once bodies could
+be multi-line: it used to render `c.command` directly into one `<Text>`,
+which worked when every command was one line but breaks for a multi-line
+value — the embedded `"\n"` still splits it into multiple rendered rows,
+but the continuation rows lose the row's own leading indent and land flush
+against the box border, which — confirmed with a real pty run against
+`wsmdev`, not just `ink-testing-library`'s static `lastFrame()` snapshot —
+visibly corrupted the surrounding box's borders for at least one frame
+(`ink-testing-library` didn't catch this on its own; it renders a fresh
+static snapshot per call rather than the incremental terminal diff a real
+render does, so the specific glitch only showed up against a real
+terminal). Fixed by showing only `command.split("\n")[0]` plus a trailing
+`" …"` when there's more — the list is a preview, not the editor. If you
+touch list rendering for anything else here, keep it constrained to
+single-line rows for the same reason; don't feed a value that might contain
+embedded newlines into a plain `<Text>` and assume word-wrap will handle it
+— word-wrap and an embedded literal `\n` are different things in Ink.
+
+Even after that fix, a real pty run still shows a one-frame border-overlap
+glitch specifically on the transition into/out of `CustomCommandsScreen`
+when its content height changes a lot (e.g. saving a command and landing
+back on a list with several entries). Ruled out as a regression from this
+feature specifically: the same kind of transition through an unrelated,
+pre-existing overlay (submitting `WorkspaceForm` and landing back on a
+very differently-sized two-pane layout) renders cleanly, with no glitch, in
+the same kind of real-pty check. The likely cause is that every overlay in
+`App.tsx` is wrapped in a `justifyContent="center"`d `Box` (see the
+`overlayNode` render near the bottom of `App.tsx`), so a large height swing
+between one overlay's content and the next re-centers the box at a very
+different starting row, which is harder for Ink's terminal-diffing to patch
+cleanly than the Groups/Workspaces panes' fixed-position layout — Custom
+Commands just happens to produce one of the largest such swings (a short
+add-command form to a list of often-multi-line entries). It's cosmetic and
+self-heals on the very next render; left as a known quirk rather than
+chased further, since fixing it for real would mean addressing how centered
+overlays behave across large height changes in general, not something
+specific to this feature.
+
 The TUI screen
 (`CustomCommandsScreen` in `App.tsx`, key `c` from the Groups pane — a free
 key there, unlike in the workspaces/items panes where `c` already means

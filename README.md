@@ -125,11 +125,17 @@ customCommands:
       kill "$pid"
 ```
 
-The TUI's Command field is single-line only, so a multi-line body like that
-has to be hand-edited into `config.yaml` (a YAML block scalar, as above) —
-the TUI is still the easy path for simple one-liners. Custom commands only
-take effect in new shells once shell integration's rc line is in place (see
-above) — adding one before that just saves it to config for later.
+The TUI's Command field supports this directly. Landing on it, `enter`
+behaves like on any other field (saves/moves on); typing anything else
+starts editing it, and from then on `enter` adds a line instead — `esc`
+stops editing (without closing the form), after which `enter` goes back to
+saving. The field's text turns a different color while you're actively
+editing it, so it's always clear which mode you're in. The same command is
+just as easy to hand-edit into `config.yaml` too (a YAML block scalar, as
+above), if you'd rather write it in an editor. Custom commands only take
+effect in new shells once shell integration's rc
+line is in place (see above) — adding one before that just saves it to
+config for later.
 
 ## Configuring a workspace
 

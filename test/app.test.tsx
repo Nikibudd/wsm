@@ -13,6 +13,7 @@ const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const ENTER = "\r";
 const ESC = "\x1b";
+const TAB = "\t";
 
 function flush(ms = 30) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -410,9 +411,11 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(ENTER);
     await flush(); // -> Command field
-    stdin.write("docker compose logs -f");
+    stdin.write("docker compose logs -f"); // typing starts multiline "edit mode"
     await flush();
-    stdin.write(ENTER); // last field -> submit
+    stdin.write(ESC); // exit edit mode (does not cancel the form)
+    await flush();
+    stdin.write(ENTER); // not editing anymore: enter behaves like any other field -> submit
     await flush();
 
     expect(lastFrame()).toContain("logs");
@@ -438,9 +441,11 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(ENTER);
     await flush(); // -> Command field
-    stdin.write("echo hi");
+    stdin.write("echo hi"); // typing starts multiline "edit mode"
     await flush();
-    stdin.write(ENTER); // last field -> submit, fails name validation
+    stdin.write(ESC); // exit edit mode (does not cancel the form)
+    await flush();
+    stdin.write(ENTER); // not editing anymore: enter behaves like any other field -> submit, fails name validation
     await flush();
 
     expect(lastFrame()).toContain("valid shell function name");
@@ -471,12 +476,16 @@ customCommands:
     await flush(); // -> Name field (prefilled "logs")
     stdin.write(ENTER);
     await flush(); // -> Command field (prefilled), replace it
-    stdin.write("\x7f".repeat(30)); // clear the prefilled command text
+    stdin.write("\x7f"); // backspace starts multiline "edit mode" too, same as typing
+    await flush();
+    stdin.write("\x7f".repeat(29)); // clear the rest of the prefilled command text
     await flush();
     stdin.write("docker compose logs -f --tail=100");
     await flush();
-    stdin.write(ENTER);
-    await flush(); // submit
+    stdin.write(ESC); // exit edit mode (does not cancel the form)
+    await flush();
+    stdin.write(ENTER); // not editing anymore: enter behaves like any other field -> submit
+    await flush();
 
     expect(lastFrame()).toContain("docker compose logs -f --tail=100");
 
@@ -495,6 +504,90 @@ customCommands:
 
     const config = readConfigYaml(tmpDir);
     expect(config.customCommands).toEqual([]);
+  });
+
+  test("the Command field: enter submits until you start typing, then enter inserts a newline until esc", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("c");
+    await flush();
+    stdin.write("a");
+    await flush(); // -> Name field
+    stdin.write("greet");
+    await flush();
+    stdin.write(TAB); // tab is a no-op on a plain text field — must not advance
+    await flush();
+    stdin.write(ENTER); // enter is what actually advances a text field
+    await flush(); // -> Command field (multiline), not yet edited
+
+    // Landing on a fresh multiline field: enter behaves like any other
+    // field (advance/submit), not "insert a newline" — this only changes
+    // once you actually start typing into it. Since Command is the last
+    // field, this submits the form, so back out to prove it: cancel and
+    // reopen the "add" form from scratch to actually test the typing path.
+    stdin.write(ESC); // cancel the still-empty form (not editing yet, so esc cancels)
+    await flush();
+
+    stdin.write("a");
+    await flush();
+    stdin.write("greet");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Command field
+
+    stdin.write('local who="${1:-world}"'); // typing starts multiline "edit mode"
+    await flush();
+    stdin.write(ENTER); // while editing, enter inserts a newline, does not submit
+    await flush();
+    stdin.write('echo "hi $who"');
+    await flush();
+
+    // still mid-edit: esc here exits edit mode, not the whole form
+    stdin.write(ESC);
+    await flush();
+    expect(lastFrame()).toContain("New custom command");
+
+    stdin.write(ENTER); // not editing anymore: enter now submits
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.customCommands).toEqual([
+      { name: "greet", command: 'local who="${1:-world}"\necho "hi $who"' },
+    ]);
+  });
+
+  test("the Custom Commands list shows only the first line of a multi-line command, not the raw embedded newlines", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces: []
+customCommands:
+  - name: greet
+    command: |-
+      local who="\${1:-world}"
+      echo "hi $who"
+`,
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("c");
+    await flush();
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain('local who="${1:-world}"');
+    // The rest of the body must not leak into the list at all — a naive
+    // <Text> render of the full multi-line string breaks the box layout
+    // (confirmed via a real pty run against wsmdev, not just this harness):
+    // the embedded newline splits the row's text but the second line loses
+    // the row's own indentation, landing flush against the box border.
+    expect(frame).not.toContain('echo "hi $who"');
+
+    unmount();
   });
 });
 

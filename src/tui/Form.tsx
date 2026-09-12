@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useInput, useStdout } from "ink";
+import type { Key } from "ink";
 import { isValidCustomCommandName } from "../customCommands.js";
 import type {
   CustomCommand,
@@ -20,7 +21,7 @@ export interface FieldOption {
 export interface FieldDef {
   key: string;
   label: string;
-  kind: "text" | "select";
+  kind: "text" | "select" | "multiline";
   options?: FieldOption[];
   placeholder?: string;
 }
@@ -58,6 +59,14 @@ export function Form({
   onCancel,
 }: FormProps) {
   const [focusIndex, setFocusIndex] = useState(0);
+  // Multiline fields are modal: while not editing, enter/esc mean the same
+  // thing they do on every other field (advance-or-submit / cancel), so
+  // typing behavior stays consistent across the whole form. The moment you
+  // type anything else, this flips true and enter starts meaning "newline"
+  // instead — esc is the only way back out, to normal per-field navigation.
+  // Reset on every focus change so landing on (or back on) a multiline
+  // field always starts in the non-editing state, never mid-edit.
+  const [multilineEditing, setMultilineEditing] = useState(false);
   const { stdout } = useStdout();
   const theme = useTheme();
   const resolvedAccent = accentColor ?? theme.accent;
@@ -69,18 +78,56 @@ export function Form({
     }
   }, [fields.length, focusIndex]);
 
+  useEffect(() => {
+    setMultilineEditing(false);
+  }, [focusIndex]);
+
   const advanceOrSubmit = () => {
     if (focusIndex === fields.length - 1) onSubmit();
     else setFocusIndex((i) => i + 1);
   };
 
+  // Shared by both multiline states below: backspace/ctrl+u/plain-character
+  // editing is identical whether this keystroke is what started editing or
+  // editing was already underway — only what enter/esc/tab do differs.
+  const applyMultilineKeystroke = (fieldKey: string, input: string, key: Key) => {
+    if (key.backspace || key.delete) {
+      onChange(fieldKey, (prev) => prev.slice(0, -1));
+      return;
+    }
+    if (key.ctrl && input === "u") {
+      onChange(fieldKey, () => "");
+      return;
+    }
+    if (key.ctrl || key.meta) {
+      return;
+    }
+    if (input) {
+      onChange(fieldKey, (prev) => prev + input);
+    }
+  };
+
   useInput((input, key) => {
+    const field = fields[focusIndex];
+
+    if (field?.kind === "multiline" && multilineEditing) {
+      if (key.escape) {
+        setMultilineEditing(false);
+        return;
+      }
+      if (key.return) {
+        onChange(field.key, (prev) => prev + "\n");
+        return;
+      }
+      applyMultilineKeystroke(field.key, input, key);
+      return;
+    }
+
     if (key.escape) {
       onCancel();
       return;
     }
 
-    const field = fields[focusIndex];
     if (!field) return;
 
     if (key.upArrow) {
@@ -107,6 +154,24 @@ export function Form({
         return;
       }
       if (key.return) advanceOrSubmit();
+      return;
+    }
+
+    if (field.kind === "multiline") {
+      // Not editing yet: enter behaves like every other field (advance or
+      // submit). Starting to type — anything but tab, which stays a no-op
+      // here just like on a text field — is what switches into edit mode,
+      // applying this same keystroke immediately rather than requiring a
+      // separate "start editing" key first.
+      if (key.return) {
+        advanceOrSubmit();
+        return;
+      }
+      if (key.tab) {
+        return;
+      }
+      setMultilineEditing(true);
+      applyMultilineKeystroke(field.key, input, key);
       return;
     }
 
@@ -172,6 +237,44 @@ export function Form({
                     {value || f.placeholder || "—"}
                   </Text>
                 )
+              ) : f.kind === "multiline" ? (
+                (() => {
+                  const editing = focused && multilineEditing;
+                  // Distinct color while actively editing, on top of the
+                  // cursor block — the whole point is a visible answer to
+                  // "am I currently typing into this, or just looking at
+                  // it," since enter/esc mean different things in each state.
+                  const valueColor = editing ? resolvedAccent : theme.text;
+                  return (
+                    <Box flexDirection="column">
+                      {value ? (
+                        value.split("\n").map((line, li, lines) => (
+                          <Text key={li} color={valueColor}>
+                            {line}
+                            {editing && li === lines.length - 1 ? (
+                              <Text backgroundColor={valueColor} color={theme.selectionText}>
+                                {" "}
+                              </Text>
+                            ) : null}
+                          </Text>
+                        ))
+                      ) : (
+                        <Text color={focused ? valueColor : theme.border}>
+                          {editing ? (
+                            <Text backgroundColor={valueColor} color={theme.selectionText}>
+                              {" "}
+                            </Text>
+                          ) : null}
+                          {f.placeholder ? (
+                            <Text dimColor>{focused ? ` ${f.placeholder}` : f.placeholder}</Text>
+                          ) : focused ? null : (
+                            "—"
+                          )}
+                        </Text>
+                      )}
+                    </Box>
+                  );
+                })()
               ) : (
                 <Text color={focused ? resolvedAccent : theme.text}>
                   ‹ {f.options?.find((o) => o.value === value)?.label ?? value} ›
@@ -188,7 +291,13 @@ export function Form({
         </>
       ) : null}
       <Box height={1} />
-      <Text dimColor>↑↓ field · ←→ change · enter next / {submitLabel} · esc cancel</Text>
+      <Text dimColor>
+        {fields[focusIndex]?.kind === "multiline"
+          ? multilineEditing
+            ? "enter newline · esc done editing"
+            : `↑↓ field · enter next / ${submitLabel} · type to edit · esc cancel`
+          : `↑↓ field · ←→ change · enter next / ${submitLabel} · esc cancel`}
+      </Text>
     </Box>
   );
 }
@@ -583,7 +692,12 @@ export function CustomCommandForm({
 
   const fields: FieldDef[] = [
     { key: "name", label: "Name", kind: "text", placeholder: "e.g. logs" },
-    { key: "command", label: "Command", kind: "text", placeholder: 'docker compose logs -f "$@"' },
+    {
+      key: "command",
+      label: "Command",
+      kind: "multiline",
+      placeholder: 'docker compose logs -f "$@"',
+    },
   ];
 
   const handleSubmit = () => {
