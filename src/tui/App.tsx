@@ -157,7 +157,7 @@ const TABS: { key: Tab; number: string; label: string }[] = [
 function TabBar({ activeTab, width }: { activeTab: Tab; width: number }) {
   const theme = useTheme();
   return (
-    <Box paddingX={1} width={width}>
+    <Box paddingX={1} width={width} borderStyle="round" borderColor={theme.accent}>
       {TABS.map((tab) => {
         const active = tab.key === activeTab;
         return (
@@ -866,9 +866,8 @@ export function App() {
     { isActive: overlay === null },
   );
 
-  // -6, not -5: Header (3 rows) + the new TabBar row (1) + Footer (1) + one
-  // separator row between the tab bar and the main content area.
-  const contentHeight = Math.max(10, rows - 6);
+  // -7, not -5: Header (3 rows) + the bordered TabBar (3 rows) + Footer (1).
+  const contentHeight = Math.max(10, rows - 7);
 
   const hint = useMemo(() => {
     if (pane === "groups") {
