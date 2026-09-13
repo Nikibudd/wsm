@@ -714,7 +714,7 @@ customCommands:
     ]);
   });
 
-  test("the Custom Commands list shows only the first line of a multi-line command, not the raw embedded newlines", async () => {
+  test("the Custom Commands detail panel shows the full, untruncated multi-line command body", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, "config.yaml"),
@@ -733,14 +733,12 @@ customCommands:
     stdin.write("2");
     await flush();
 
+    // The sidebar lists just the name; the main panel shows the selected
+    // command's full body, every line, untruncated.
     const frame = lastFrame() ?? "";
+    expect(frame).toContain("greet");
     expect(frame).toContain('local who="${1:-world}"');
-    // The rest of the body must not leak into the list at all — a naive
-    // <Text> render of the full multi-line string breaks the box layout
-    // (confirmed via a real pty run against wsmdev, not just this harness):
-    // the embedded newline splits the row's text but the second line loses
-    // the row's own indentation, landing flush against the box border.
-    expect(frame).not.toContain('echo "hi $who"');
+    expect(frame).toContain('echo "hi $who"');
 
     unmount();
   });

@@ -446,22 +446,123 @@ type CustomCommandsMode =
   | { kind: "form"; index: number | null }
   | { kind: "confirmDelete"; index: number };
 
-// Self-contained overlay, unlike the Groups->Workspaces->Items drill-down:
-// custom commands are a flat, workspace-independent list, so add/edit/delete
-// are all handled as internal modes here rather than as separate top-level
-// Overlay kinds in App — App only ever sees one { kind: "customCommands" }.
+// Sidebar half of the Custom Commands tab, mirroring WorkspaceListPane:
+// names only (no preview) plus a synthetic "+ Add command" row.
+function CustomCommandListPane({
+  commands,
+  selectedIndex,
+  height,
+}: {
+  commands: CustomCommand[];
+  selectedIndex: number;
+  height: number;
+}) {
+  const theme = useTheme();
+  const addRowIndex = commands.length;
+  return (
+    <Box
+      flexDirection="column"
+      width={32}
+      height={height}
+      borderStyle="round"
+      borderColor={theme.borderActive}
+      paddingX={1}
+    >
+      <Text bold underline color={theme.accent}>
+        Custom commands
+      </Text>
+      <Box height={1} />
+      {commands.length === 0 ? (
+        <Text dimColor>No custom commands yet.</Text>
+      ) : (
+        commands.map((c, i) => (
+          <Text key={c.name} {...rowStyle(i === selectedIndex, theme)}>
+            {i === selectedIndex ? "› " : "  "}
+            {c.name}
+          </Text>
+        ))
+      )}
+      <Box height={1} />
+      <Text {...rowStyle(selectedIndex === addRowIndex, theme, theme.success)}>
+        {selectedIndex === addRowIndex ? "› " : "  "}+ Add command
+      </Text>
+    </Box>
+  );
+}
+
+// Main-panel half, mirroring ItemPane: the selected command's full body,
+// every line rendered as-is (never truncated) — unlike the old single-box
+// list, which could only show a one-line preview without corrupting its
+// own layout (see the removed comment this replaces, in git history).
+function CustomCommandDetailPane({
+  command,
+  height,
+}: {
+  command: CustomCommand | undefined;
+  height: number;
+}) {
+  const theme = useTheme();
+
+  if (!command) {
+    return (
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        height={height}
+        borderStyle="round"
+        borderColor={theme.border}
+        paddingX={2}
+        justifyContent="center"
+        alignItems="center"
+      >
+        <Text dimColor>Select a command, or press "a" to add one.</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      flexDirection="column"
+      flexGrow={1}
+      height={height}
+      borderStyle="round"
+      borderColor={theme.border}
+      paddingX={2}
+    >
+      <Text bold underline color={theme.text}>
+        {command.name}
+      </Text>
+      <Box height={1} />
+      {command.command.split("\n").map((line, i) => (
+        // A fully-empty line would collapse to zero height in Ink; a single
+        // space keeps blank lines in the body visible.
+        <Text key={i} color={theme.text}>
+          {line || " "}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+// Self-contained tab content, unlike the Groups->Workspaces->Items
+// drill-down: custom commands are a flat, workspace-independent list, so
+// add/edit/delete are all handled as internal modes here rather than as
+// separate top-level Overlay kinds in App — App only ever mounts this one
+// component while its tab is active. The "list" mode renders the same
+// sidebar + main panel layout as the Workspaces tab (see AGENTS.md); the
+// "form"/"confirmDelete" modes take over the full area as a centered
+// dialog, the same way Workspaces' own add/edit overlays do.
 function CustomCommandsScreen({
   commands,
   onChange,
   flash,
+  height,
 }: {
   commands: CustomCommand[];
   onChange: (next: CustomCommand[]) => void;
   flash: (text: string) => void;
+  height: number;
 }) {
-  const theme = useTheme();
-  const { stdout } = useStdout();
-  const width = Math.max(40, Math.min(70, (stdout?.columns || 80) - 4));
   const [mode, setMode] = useState<CustomCommandsMode>({ kind: "list" });
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -493,78 +594,53 @@ function CustomCommandsScreen({
   if (mode.kind === "form") {
     const existing = mode.index !== null ? commands[mode.index] : undefined;
     return (
-      <CustomCommandForm
-        existing={existing}
-        existingNames={commands.map((c) => c.name)}
-        onSubmit={(command) => {
-          const next = [...commands];
-          if (mode.index !== null) next[mode.index] = command;
-          else next.push(command);
-          onChange(next);
-          setMode({ kind: "list" });
-          flash(`Saved custom command "${command.name}"`);
-        }}
-        onCancel={() => setMode({ kind: "list" })}
-      />
+      <Box flexGrow={1} height={height} alignItems="center" justifyContent="center">
+        <CustomCommandForm
+          existing={existing}
+          existingNames={commands.map((c) => c.name)}
+          onSubmit={(command) => {
+            const next = [...commands];
+            if (mode.index !== null) next[mode.index] = command;
+            else next.push(command);
+            onChange(next);
+            setMode({ kind: "list" });
+            flash(`Saved custom command "${command.name}"`);
+          }}
+          onCancel={() => setMode({ kind: "list" })}
+        />
+      </Box>
     );
   }
 
   if (mode.kind === "confirmDelete") {
     const command = commands[mode.index];
     return command ? (
-      <ConfirmDialog
-        message={`Delete custom command "${command.name}"?`}
-        onConfirm={() => {
-          onChange(commands.filter((_, i) => i !== mode.index));
-          setMode({ kind: "list" });
-          flash(`Deleted custom command "${command.name}"`);
-        }}
-        onCancel={() => setMode({ kind: "list" })}
-      />
+      <Box flexGrow={1} height={height} alignItems="center" justifyContent="center">
+        <ConfirmDialog
+          message={`Delete custom command "${command.name}"?`}
+          onConfirm={() => {
+            onChange(commands.filter((_, i) => i !== mode.index));
+            setMode({ kind: "list" });
+            flash(`Deleted custom command "${command.name}"`);
+          }}
+          onCancel={() => setMode({ kind: "list" })}
+        />
+      </Box>
     ) : null;
   }
 
-  const addRowIndex = commands.length;
+  // -1: one line reserved below the panes for the hint text, the same way
+  // App reserves a row for its own Footer outside contentHeight.
+  const paneHeight = height - 1;
+  const selectedCommand = selectedIndex < commands.length ? commands[selectedIndex] : undefined;
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={2} paddingY={1} width={width}>
-      <Text bold color={theme.accent}>
-        Custom commands
-      </Text>
-      <Text dimColor>
-        Shell functions available in every new terminal (via `wsm commands`), independent of any
-        workspace. The command is the exact function body (add "$@" yourself for passthrough args) —
-        type into the Command field to edit it (enter adds a line, esc stops editing).
-      </Text>
-      <Box height={1} />
-      {commands.length === 0 ? (
-        <Text dimColor>No custom commands yet.</Text>
-      ) : (
-        commands.map((c, i) => {
-          const selected = i === selectedIndex;
-          const lines = c.command.split("\n");
-          const preview = lines[0] + (lines.length > 1 ? " …" : "");
-          return (
-            <Box key={c.name} flexDirection="column" marginBottom={1}>
-              <Text {...rowStyle(selected, theme)}>
-                {selected ? "› " : "  "}
-                {c.name}
-              </Text>
-              {/* Only the first line, truncated: a multi-line command's raw
-                  "\n" would otherwise split this into extra rows that lose
-                  the leading indent, breaking the box's layout (confirmed
-                  via a real pty run, not just this test harness). */}
-              <Text dimColor wrap="truncate-end">
-                {"    "}
-                {preview}
-              </Text>
-            </Box>
-          );
-        })
-      )}
-      <Text {...rowStyle(selectedIndex === addRowIndex, theme, theme.success)}>
-        {selectedIndex === addRowIndex ? "› " : "  "}+ Add command
-      </Text>
-      <Box height={1} />
+    <Box flexDirection="column" flexGrow={1} height={height}>
+      <Box flexDirection="row" height={paneHeight}>
+        <CustomCommandListPane commands={commands} selectedIndex={selectedIndex} height={paneHeight} />
+        <Box width={1} />
+        <CustomCommandDetailPane command={selectedCommand} height={paneHeight} />
+      </Box>
       <Text dimColor>↑↓ select · enter edit · a add · d delete · 1/2/3 tabs · q quit</Text>
     </Box>
   );
@@ -1109,6 +1185,7 @@ export function App() {
       commands={config.customCommands ?? []}
       onChange={(next) => setConfig((prev) => ({ ...prev, customCommands: next }))}
       flash={flash}
+      height={contentHeight}
     />
   );
 
@@ -1119,6 +1196,8 @@ export function App() {
       themeNames={themesFile.themes.map((t) => t.name)}
       activeTheme={themesFile.activeTheme}
       completionAvailable={shell !== null}
+      fullScreen
+      height={contentHeight}
       onPreviewTheme={setPreviewThemeName}
       onSubmit={({ settings, theme }) => {
         if (shell && settings.autocomplete !== previousSettings.autocomplete) {
@@ -1149,13 +1228,9 @@ export function App() {
               {overlayNode}
             </Box>
           ) : activeTab === "customCommands" ? (
-            <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
-              {customCommandsNode}
-            </Box>
+            customCommandsNode
           ) : activeTab === "settings" ? (
-            <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
-              {settingsNode}
-            </Box>
+            settingsNode
           ) : (
             <>
               {pane === "groups" ? (
