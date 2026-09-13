@@ -451,10 +451,16 @@ type CustomCommandsMode =
 function CustomCommandListPane({
   commands,
   selectedIndex,
+  active,
   height,
 }: {
   commands: CustomCommand[];
   selectedIndex: number;
+  // False while a command is being added/edited inline in the main panel
+  // (see CustomCommandsScreen's "form" mode below) — the sidebar stays
+  // visible for context but drops its highlight styling, matching how
+  // WorkspaceListPane dims when focus has moved into the items pane.
+  active: boolean;
   height: number;
 }) {
   const theme = useTheme();
@@ -465,10 +471,10 @@ function CustomCommandListPane({
       width={32}
       height={height}
       borderStyle="round"
-      borderColor={theme.borderActive}
+      borderColor={active ? theme.borderActive : theme.border}
       paddingX={1}
     >
-      <Text bold underline color={theme.accent}>
+      <Text bold underline color={active ? theme.accent : theme.text}>
         Custom commands
       </Text>
       <Box height={1} />
@@ -476,15 +482,15 @@ function CustomCommandListPane({
         <Text dimColor>No custom commands yet.</Text>
       ) : (
         commands.map((c, i) => (
-          <Text key={c.name} {...rowStyle(i === selectedIndex, theme)}>
-            {i === selectedIndex ? "› " : "  "}
+          <Text key={c.name} {...rowStyle(active && i === selectedIndex, theme)}>
+            {active && i === selectedIndex ? "› " : "  "}
             {c.name}
           </Text>
         ))
       )}
       <Box height={1} />
-      <Text {...rowStyle(selectedIndex === addRowIndex, theme, theme.success)}>
-        {selectedIndex === addRowIndex ? "› " : "  "}+ Add command
+      <Text {...rowStyle(active && selectedIndex === addRowIndex, theme, theme.success)}>
+        {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add command
       </Text>
     </Box>
   );
@@ -548,10 +554,13 @@ function CustomCommandDetailPane({
 // drill-down: custom commands are a flat, workspace-independent list, so
 // add/edit/delete are all handled as internal modes here rather than as
 // separate top-level Overlay kinds in App — App only ever mounts this one
-// component while its tab is active. The "list" mode renders the same
-// sidebar + main panel layout as the Workspaces tab (see AGENTS.md); the
-// "form"/"confirmDelete" modes take over the full area as a centered
-// dialog, the same way Workspaces' own add/edit overlays do.
+// component while its tab is active. The "list" and "form" modes both keep
+// the sidebar on screen and share its layout — adding/editing a command
+// happens inline in the main panel, the same space that otherwise shows the
+// selected command's body, rather than a dialog covering the whole tab.
+// "confirmDelete" is the exception: a plain yes/no prompt still takes over
+// as a centered dialog, same as every destructive confirmation elsewhere in
+// the app (see Workspaces' own confirmDeleteWorkspace/confirmDeleteItem).
 function CustomCommandsScreen({
   commands,
   onChange,
@@ -594,10 +603,14 @@ function CustomCommandsScreen({
   if (mode.kind === "form") {
     const existing = mode.index !== null ? commands[mode.index] : undefined;
     return (
-      <Box flexGrow={1} height={height} alignItems="center" justifyContent="center">
+      <Box flexDirection="row" flexGrow={1} height={height}>
+        <CustomCommandListPane commands={commands} selectedIndex={selectedIndex} active={false} height={height} />
+        <Box width={1} />
         <CustomCommandForm
           existing={existing}
           existingNames={commands.map((c) => c.name)}
+          fullScreen
+          height={height}
           onSubmit={(command) => {
             const next = [...commands];
             if (mode.index !== null) next[mode.index] = command;
@@ -637,7 +650,12 @@ function CustomCommandsScreen({
   return (
     <Box flexDirection="column" flexGrow={1} height={height}>
       <Box flexDirection="row" height={paneHeight}>
-        <CustomCommandListPane commands={commands} selectedIndex={selectedIndex} height={paneHeight} />
+        <CustomCommandListPane
+          commands={commands}
+          selectedIndex={selectedIndex}
+          active
+          height={paneHeight}
+        />
         <Box width={1} />
         <CustomCommandDetailPane command={selectedCommand} height={paneHeight} />
       </Box>

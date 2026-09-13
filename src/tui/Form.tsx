@@ -812,11 +812,18 @@ export function RenameGroupForm({
 export function CustomCommandForm({
   existing,
   existingNames,
+  fullScreen,
+  height,
   onSubmit,
   onCancel,
 }: {
   existing?: CustomCommand;
   existingNames: string[];
+  /** See Form's fullScreen/height — used so editing a command can happen
+   * inline in the Custom Commands tab's own main panel, next to the
+   * still-visible sidebar, instead of a centered dialog covering it. */
+  fullScreen?: boolean;
+  height?: number;
   onSubmit: (command: CustomCommand) => void;
   onCancel: () => void;
 }) {
@@ -866,6 +873,8 @@ export function CustomCommandForm({
       values={values}
       error={error}
       submitLabel="save"
+      fullScreen={fullScreen}
+      height={height}
       onChange={(k, updater) => {
         setError("");
         setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));

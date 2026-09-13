@@ -476,15 +476,28 @@ styled exactly like `WorkspaceListPane`) and a `CustomCommandDetailPane`
 — unlike the old single-box list, which truncated a multi-line body to its
 first line specifically to avoid corrupting *that* box's layout; a
 dedicated main panel doesn't have that problem, so the truncation and its
-regression test both went away). `CustomCommandsScreen`'s own "form"/
-"confirmDelete" modes deliberately did **not** get the sidebar+main
-treatment — they still render as a centered dialog (their own
-`alignItems="center" justifyContent="center"` wrapper), same as
-Workspaces' own add/edit forms (`WorkspaceForm`/`ItemForm`, rendered as
-`overlayNode` in `App.tsx`) always have. The rule of thumb this settled
-on: a *browsing* view (a list of things) gets the full-screen sidebar+main
-layout; a *transient edit* view (a single form, a yes/no confirmation)
-stays a centered dialog regardless of which tab it's reached from.
+regression test both went away).
+
+`CustomCommandsScreen`'s "form" mode (add/edit) renders **inline in the
+main panel**, not as a centered dialog: the sidebar (`CustomCommandListPane`,
+passed `active={false}` so it dims — border/title/row-highlight all drop to
+their inactive colors, same as `WorkspaceListPane` when focus has moved
+into the items pane) stays on screen next to `CustomCommandForm`, which
+takes over the space `CustomCommandDetailPane` otherwise occupies. This was
+a deliberate correction after first shipping it as a centered dialog (like
+Workspaces' own add/edit overlays) — editing a thing on the same part of
+the screen that displays it reads as more direct than a modal covering the
+whole tab, once there's a main panel to edit *in*. `mode.kind ===
+"confirmDelete"` is the one exception left as a full centered dialog
+(covering the sidebar too, via its own `alignItems="center"
+justifyContent="center"` wrapper) — a plain yes/no prompt has no "part of
+the screen it shows usually" to be inline *in*, so it stays consistent with
+every other destructive confirmation in the app (Workspaces'
+`confirmDeleteWorkspace`/`confirmDeleteItem`, both rendered as `overlayNode`
+in `App.tsx`). The rule of thumb this settled on: a browsing view (a list
+of things) gets the sidebar+main layout, and so does *editing* one of those
+things, in the main panel's own space; only a transient yes/no prompt with
+no natural "usual" location stays a centered dialog.
 
 Settings has no sidebar (it's one flat form, nothing to browse), so making
 it full-screen meant stretching the form itself rather than adding a
@@ -493,16 +506,15 @@ second pane. `Form` (in `Form.tsx`) gained an optional `fullScreen`/
 default `width={<= 68, centered by caller>}` to `flexGrow={1}` (plus the
 given `height`), so it fills whatever it's placed directly into — same
 mechanism `ItemPane` already relies on (a `flexGrow` box placed directly as
-a sibling in `App`'s top-level content row, which has a definite width, so
-`flexGrow` has real leftover space to expand into). Every *other* form
-(`ItemForm`/`WorkspaceForm`/`RenameGroupForm`/`CustomCommandForm`) leaves
-`fullScreen` unset and keeps the original capped-width centered-dialog
-look — this was an additive, opt-in change to the shared `Form` component,
-not a behavior change for its existing callers. `SettingsForm` is the only
-caller that passes `fullScreen`/`height` through, from `App.tsx` where it's
-rendered directly into the content row (no `alignItems`/`justifyContent`
-centering wrapper) exactly like the Workspaces fragment and
-`CustomCommandsScreen` are.
+a sibling in a parent row that has a definite width, so `flexGrow` has real
+leftover space to expand into — for `SettingsForm` that parent is `App`'s
+top-level content row; for `CustomCommandForm` in "form" mode, it's the row
+inside `CustomCommandsScreen` that also holds the sidebar). Every *other*
+form use (`ItemForm`/`WorkspaceForm`/`RenameGroupForm`, and
+`CustomCommandForm` outside the Custom Commands tab's own inline-edit case)
+leaves `fullScreen` unset and keeps the original capped-width
+centered-dialog look — this was an additive, opt-in change to the shared
+`Form` component, not a behavior change for its other existing callers.
 
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
