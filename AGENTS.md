@@ -465,6 +465,45 @@ reason — switching into Custom Commands or Settings can be just as large a
 height change as opening the overlay version used to be. Same conclusion:
 cosmetic, not chased further, not specific to this feature.
 
+**Custom Commands and Settings were later upgraded from small centered boxes
+to the same full-screen treatment Workspaces always had** — Workspaces is
+the reference layout (sidebar list pane + flexGrow main panel, both given
+an explicit `height={contentHeight}` prop rather than relying on flexGrow
+alone for vertical sizing, per the note above). Custom Commands now has a
+`CustomCommandListPane` (command names + a synthetic "+ Add command" row,
+styled exactly like `WorkspaceListPane`) and a `CustomCommandDetailPane`
+(the selected command's full body, one `<Text>` per line, never truncated
+— unlike the old single-box list, which truncated a multi-line body to its
+first line specifically to avoid corrupting *that* box's layout; a
+dedicated main panel doesn't have that problem, so the truncation and its
+regression test both went away). `CustomCommandsScreen`'s own "form"/
+"confirmDelete" modes deliberately did **not** get the sidebar+main
+treatment — they still render as a centered dialog (their own
+`alignItems="center" justifyContent="center"` wrapper), same as
+Workspaces' own add/edit forms (`WorkspaceForm`/`ItemForm`, rendered as
+`overlayNode` in `App.tsx`) always have. The rule of thumb this settled
+on: a *browsing* view (a list of things) gets the full-screen sidebar+main
+layout; a *transient edit* view (a single form, a yes/no confirmation)
+stays a centered dialog regardless of which tab it's reached from.
+
+Settings has no sidebar (it's one flat form, nothing to browse), so making
+it full-screen meant stretching the form itself rather than adding a
+second pane. `Form` (in `Form.tsx`) gained an optional `fullScreen`/
+`height` pair of props: `fullScreen` swaps the form's outer `Box` from its
+default `width={<= 68, centered by caller>}` to `flexGrow={1}` (plus the
+given `height`), so it fills whatever it's placed directly into — same
+mechanism `ItemPane` already relies on (a `flexGrow` box placed directly as
+a sibling in `App`'s top-level content row, which has a definite width, so
+`flexGrow` has real leftover space to expand into). Every *other* form
+(`ItemForm`/`WorkspaceForm`/`RenameGroupForm`/`CustomCommandForm`) leaves
+`fullScreen` unset and keeps the original capped-width centered-dialog
+look — this was an additive, opt-in change to the shared `Form` component,
+not a behavior change for its existing callers. `SettingsForm` is the only
+caller that passes `fullScreen`/`height` through, from `App.tsx` where it's
+rendered directly into the content row (no `alignItems`/`justifyContent`
+centering wrapper) exactly like the Workspaces fragment and
+`CustomCommandsScreen` are.
+
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
 `config.yaml`/`settings` because it's display state, not workspace config.
