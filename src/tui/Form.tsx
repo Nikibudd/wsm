@@ -42,6 +42,13 @@ interface FormProps {
   values: Record<string, string>;
   error?: string;
   submitLabel?: string;
+  /** Stretches to fill its parent (flexGrow) instead of the usual fixed,
+   * capped-width dialog box — used when a form is a tab's entire full-screen
+   * content (e.g. Settings) rather than a centered overlay. */
+  fullScreen?: boolean;
+  /** Only meaningful with fullScreen: the exact height to fill, matching the
+   * contentHeight every other full-screen pane is given. */
+  height?: number;
   onChange: FieldUpdater;
   onSubmit: () => void;
   onCancel: () => void;
@@ -81,6 +88,8 @@ export function Form({
   values,
   error,
   submitLabel = "save",
+  fullScreen = false,
+  height,
   onChange,
   onSubmit,
   onCancel,
@@ -303,7 +312,7 @@ export function Form({
       borderColor={resolvedAccent}
       paddingX={2}
       paddingY={1}
-      width={width}
+      {...(fullScreen ? { flexGrow: 1, height } : { width })}
     >
       <Text bold color={resolvedAccent}>
         {title}
@@ -660,6 +669,8 @@ export function SettingsForm({
   themeNames,
   activeTheme,
   completionAvailable = false,
+  fullScreen,
+  height,
   onPreviewTheme,
   onSubmit,
   onCancel,
@@ -669,6 +680,9 @@ export function SettingsForm({
   activeTheme: string;
   /** Whether a supported shell (bash/zsh) was detected — hides the autocompletion field entirely otherwise, since there'd be nothing to install. */
   completionAvailable?: boolean;
+  /** See Form's fullScreen/height — Settings renders as the Settings tab's entire full-screen content, not a centered overlay. */
+  fullScreen?: boolean;
+  height?: number;
   onPreviewTheme: (name: string) => void;
   onSubmit: (result: SettingsFormResult) => void;
   onCancel: () => void;
@@ -738,6 +752,8 @@ export function SettingsForm({
       fields={fields}
       values={values}
       submitLabel="save"
+      fullScreen={fullScreen}
+      height={height}
       onChange={(k, updater) =>
         setValues((prev) => {
           const next = { ...prev, [k]: updater(prev[k] ?? "") };
@@ -796,11 +812,18 @@ export function RenameGroupForm({
 export function CustomCommandForm({
   existing,
   existingNames,
+  fullScreen,
+  height,
   onSubmit,
   onCancel,
 }: {
   existing?: CustomCommand;
   existingNames: string[];
+  /** See Form's fullScreen/height — used so editing a command can happen
+   * inline in the Custom Commands tab's own main panel, next to the
+   * still-visible sidebar, instead of a centered dialog covering it. */
+  fullScreen?: boolean;
+  height?: number;
   onSubmit: (command: CustomCommand) => void;
   onCancel: () => void;
 }) {
@@ -850,6 +873,8 @@ export function CustomCommandForm({
       values={values}
       error={error}
       submitLabel="save"
+      fullScreen={fullScreen}
+      height={height}
       onChange={(k, updater) => {
         setError("");
         setValues((prev) => ({ ...prev, [k]: updater(prev[k] ?? "") }));

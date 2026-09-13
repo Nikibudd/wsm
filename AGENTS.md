@@ -465,6 +465,57 @@ reason — switching into Custom Commands or Settings can be just as large a
 height change as opening the overlay version used to be. Same conclusion:
 cosmetic, not chased further, not specific to this feature.
 
+**Custom Commands and Settings were later upgraded from small centered boxes
+to the same full-screen treatment Workspaces always had** — Workspaces is
+the reference layout (sidebar list pane + flexGrow main panel, both given
+an explicit `height={contentHeight}` prop rather than relying on flexGrow
+alone for vertical sizing, per the note above). Custom Commands now has a
+`CustomCommandListPane` (command names + a synthetic "+ Add command" row,
+styled exactly like `WorkspaceListPane`) and a `CustomCommandDetailPane`
+(the selected command's full body, one `<Text>` per line, never truncated
+— unlike the old single-box list, which truncated a multi-line body to its
+first line specifically to avoid corrupting *that* box's layout; a
+dedicated main panel doesn't have that problem, so the truncation and its
+regression test both went away).
+
+`CustomCommandsScreen`'s "form" mode (add/edit) renders **inline in the
+main panel**, not as a centered dialog: the sidebar (`CustomCommandListPane`,
+passed `active={false}` so it dims — border/title/row-highlight all drop to
+their inactive colors, same as `WorkspaceListPane` when focus has moved
+into the items pane) stays on screen next to `CustomCommandForm`, which
+takes over the space `CustomCommandDetailPane` otherwise occupies. This was
+a deliberate correction after first shipping it as a centered dialog (like
+Workspaces' own add/edit overlays) — editing a thing on the same part of
+the screen that displays it reads as more direct than a modal covering the
+whole tab, once there's a main panel to edit *in*. `mode.kind ===
+"confirmDelete"` is the one exception left as a full centered dialog
+(covering the sidebar too, via its own `alignItems="center"
+justifyContent="center"` wrapper) — a plain yes/no prompt has no "part of
+the screen it shows usually" to be inline *in*, so it stays consistent with
+every other destructive confirmation in the app (Workspaces'
+`confirmDeleteWorkspace`/`confirmDeleteItem`, both rendered as `overlayNode`
+in `App.tsx`). The rule of thumb this settled on: a browsing view (a list
+of things) gets the sidebar+main layout, and so does *editing* one of those
+things, in the main panel's own space; only a transient yes/no prompt with
+no natural "usual" location stays a centered dialog.
+
+Settings has no sidebar (it's one flat form, nothing to browse), so making
+it full-screen meant stretching the form itself rather than adding a
+second pane. `Form` (in `Form.tsx`) gained an optional `fullScreen`/
+`height` pair of props: `fullScreen` swaps the form's outer `Box` from its
+default `width={<= 68, centered by caller>}` to `flexGrow={1}` (plus the
+given `height`), so it fills whatever it's placed directly into — same
+mechanism `ItemPane` already relies on (a `flexGrow` box placed directly as
+a sibling in a parent row that has a definite width, so `flexGrow` has real
+leftover space to expand into — for `SettingsForm` that parent is `App`'s
+top-level content row; for `CustomCommandForm` in "form" mode, it's the row
+inside `CustomCommandsScreen` that also holds the sidebar). Every *other*
+form use (`ItemForm`/`WorkspaceForm`/`RenameGroupForm`, and
+`CustomCommandForm` outside the Custom Commands tab's own inline-edit case)
+leaves `fullScreen` unset and keeps the original capped-width
+centered-dialog look — this was an additive, opt-in change to the shared
+`Form` component, not a behavior change for its other existing callers.
+
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
 `config.yaml`/`settings` because it's display state, not workspace config.
