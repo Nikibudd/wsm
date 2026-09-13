@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, saveConfig, findWorkspace, workspaceNames, getSettings } from "../src/config.js";
+import {
+  loadConfig,
+  saveConfig,
+  findWorkspace,
+  workspaceNames,
+  getSettings,
+  getCustomCommands,
+} from "../src/config.js";
 import type { Config } from "../src/types.js";
 
 describe("config", () => {
@@ -102,7 +109,7 @@ describe("config", () => {
       defaultClose: true,
       autoPruneStaleSessions: false,
       autocomplete: false,
-      autocompletePrompted: false,
+      shellIntegrationPrompted: false,
     });
   });
 
@@ -111,8 +118,38 @@ describe("config", () => {
       defaultClose: true,
       autoPruneStaleSessions: true,
       autocomplete: false,
-      autocompletePrompted: false,
+      shellIntegrationPrompted: false,
     });
+  });
+
+  test("getCustomCommands defaults to an empty array when unset", () => {
+    expect(getCustomCommands({ workspaces: [] })).toEqual([]);
+  });
+
+  test("getCustomCommands returns the configured list", () => {
+    const config: Config = {
+      workspaces: [],
+      customCommands: [{ name: "logs", command: "docker compose logs -f" }],
+    };
+    expect(getCustomCommands(config)).toEqual([{ name: "logs", command: "docker compose logs -f" }]);
+  });
+
+  // The TUI's Command field is single-line only, so a multi-line function
+  // body (e.g. pasted from an existing rc file) is necessarily hand-authored
+  // in config.yaml as a YAML block scalar — this is the actual authoring
+  // path for that, so it must round-trip the embedded newlines exactly.
+  test("saveConfig then loadConfig round-trips a multi-line custom command body", () => {
+    const original: Config = {
+      workspaces: [],
+      customCommands: [
+        {
+          name: "greet",
+          command: 'local who="${1:-world}"\n\nif [ -n "$who" ]; then\n  echo "hi $who"\nfi',
+        },
+      ],
+    };
+    saveConfig(original);
+    expect(loadConfig()).toEqual(original);
   });
 
   test("saveConfig then loadConfig round-trips settings", () => {
@@ -122,7 +159,7 @@ describe("config", () => {
         defaultClose: false,
         autoPruneStaleSessions: true,
         autocomplete: true,
-        autocompletePrompted: true,
+        shellIntegrationPrompted: true,
       },
     };
     saveConfig(original);

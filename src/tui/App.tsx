@@ -5,29 +5,45 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import Gradient from "ink-gradient";
 import { getSettings, loadConfig, saveConfig } from "../config.js";
 import { getConfigFile, getRcFilePath } from "../paths.js";
-import { detectShell, installCompletion, uninstallCompletion } from "../completionInstall.js";
-import type { CompletionShell } from "../completionInstall.js";
+import {
+  detectShell,
+  installCompletion,
+  installCompletionFilesOnly,
+  shellIntegrationRcBlock,
+  uninstallCompletion,
+} from "../shellIntegration.js";
+import type { CompletionShell } from "../shellIntegration.js";
 import { loadState } from "../state.js";
 import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
 import type { ThemeColors, ThemesFile } from "../theme.js";
-import type { Config, ItemSide, Workspace, WorkspaceItem } from "../types.js";
+import type { Config, CustomCommand, ItemSide, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
-import { ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
-import { ConfirmDialog } from "./ConfirmDialog.js";
+import { CustomCommandForm, ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
+import { ConfirmDialog, ShellIntegrationPrompt } from "./ConfirmDialog.js";
 import { ThemeProvider, useTheme } from "./ThemeContext.js";
 
 type Pane = "groups" | "workspaces" | "items";
 
+// Top-level tabs, switched with 1/2/3 (see TabBar) rather than mnemonic
+// letters — Settings and Custom Commands used to be opened with "s"/"c"
+// from the Groups pane specifically, which meant the set of keys that did
+// something depended on which pane you were looking at. As persistent
+// tabs, they're reachable the same way from anywhere, and "s"/"c" go back
+// to meaning only what they already mean within the Workspaces tab
+// (settings had no other "s" collision; "c" still means duplicate/edit
+// depending on pane, unaffected by this).
+type Tab = "workspaces" | "customCommands" | "settings";
+
 type Overlay =
   | { kind: "addWorkspace"; presetGroup?: string }
   | { kind: "editWorkspace"; workspaceName: string }
+  | { kind: "duplicateWorkspace"; workspaceName: string }
   | { kind: "itemForm"; workspaceName: string; itemIndex: number | null; presetSide?: ItemSide }
   | { kind: "confirmDeleteWorkspace"; workspaceName: string }
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
   | { kind: "confirmDeleteGroup"; groupName: string }
-  | { kind: "settings" }
-  | { kind: "autocompletePrompt"; shell: CompletionShell };
+  | { kind: "shellIntegrationPrompt"; shell: CompletionShell };
 
 function displayPath(p: string): string {
   const home = os.homedir();
@@ -128,6 +144,30 @@ function Footer({ hint, message, width }: { hint: string; message: string | null
           <Text color={theme.success}>{message}</Text>
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+const TABS: { key: Tab; number: string; label: string }[] = [
+  { key: "workspaces", number: "1", label: "Workspaces" },
+  { key: "customCommands", number: "2", label: "Custom Commands" },
+  { key: "settings", number: "3", label: "Settings" },
+];
+
+function TabBar({ activeTab, width }: { activeTab: Tab; width: number }) {
+  const theme = useTheme();
+  return (
+    <Box paddingX={1} width={width} borderStyle="round" borderColor={theme.accent}>
+      {TABS.map((tab) => {
+        const active = tab.key === activeTab;
+        return (
+          <Box key={tab.key} marginRight={3}>
+            <Text {...rowStyle(active, theme, theme.border)} bold={active}>
+              {tab.number} {tab.label}
+            </Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 }
@@ -401,12 +441,236 @@ function ItemPane({
   );
 }
 
+type CustomCommandsMode =
+  | { kind: "list" }
+  | { kind: "form"; index: number | null }
+  | { kind: "confirmDelete"; index: number };
+
+// Sidebar half of the Custom Commands tab, mirroring WorkspaceListPane:
+// names only (no preview) plus a synthetic "+ Add command" row.
+function CustomCommandListPane({
+  commands,
+  selectedIndex,
+  active,
+  height,
+}: {
+  commands: CustomCommand[];
+  selectedIndex: number;
+  // False while a command is being added/edited inline in the main panel
+  // (see CustomCommandsScreen's "form" mode below) — the sidebar stays
+  // visible for context but drops its highlight styling, matching how
+  // WorkspaceListPane dims when focus has moved into the items pane.
+  active: boolean;
+  height: number;
+}) {
+  const theme = useTheme();
+  const addRowIndex = commands.length;
+  return (
+    <Box
+      flexDirection="column"
+      width={32}
+      height={height}
+      borderStyle="round"
+      borderColor={active ? theme.borderActive : theme.border}
+      paddingX={1}
+    >
+      <Text bold underline color={active ? theme.accent : theme.text}>
+        Custom commands
+      </Text>
+      <Box height={1} />
+      {commands.length === 0 ? (
+        <Text dimColor>No custom commands yet.</Text>
+      ) : (
+        commands.map((c, i) => (
+          <Text key={c.name} {...rowStyle(active && i === selectedIndex, theme)}>
+            {active && i === selectedIndex ? "› " : "  "}
+            {c.name}
+          </Text>
+        ))
+      )}
+      <Box height={1} />
+      <Text {...rowStyle(active && selectedIndex === addRowIndex, theme, theme.success)}>
+        {active && selectedIndex === addRowIndex ? "› " : "  "}+ Add command
+      </Text>
+    </Box>
+  );
+}
+
+// Main-panel half, mirroring ItemPane: the selected command's full body,
+// every line rendered as-is (never truncated) — unlike the old single-box
+// list, which could only show a one-line preview without corrupting its
+// own layout (see the removed comment this replaces, in git history).
+function CustomCommandDetailPane({
+  command,
+  height,
+}: {
+  command: CustomCommand | undefined;
+  height: number;
+}) {
+  const theme = useTheme();
+
+  if (!command) {
+    return (
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        height={height}
+        borderStyle="round"
+        borderColor={theme.border}
+        paddingX={2}
+        justifyContent="center"
+        alignItems="center"
+      >
+        <Text dimColor>Select a command, or press "a" to add one.</Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box
+      flexDirection="column"
+      flexGrow={1}
+      height={height}
+      borderStyle="round"
+      borderColor={theme.border}
+      paddingX={2}
+    >
+      <Text bold underline color={theme.text}>
+        {command.name}
+      </Text>
+      <Box height={1} />
+      {command.command.split("\n").map((line, i) => (
+        // A fully-empty line would collapse to zero height in Ink; a single
+        // space keeps blank lines in the body visible.
+        <Text key={i} color={theme.text}>
+          {line || " "}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+// Self-contained tab content, unlike the Groups->Workspaces->Items
+// drill-down: custom commands are a flat, workspace-independent list, so
+// add/edit/delete are all handled as internal modes here rather than as
+// separate top-level Overlay kinds in App — App only ever mounts this one
+// component while its tab is active. The "list" and "form" modes both keep
+// the sidebar on screen and share its layout — adding/editing a command
+// happens inline in the main panel, the same space that otherwise shows the
+// selected command's body, rather than a dialog covering the whole tab.
+// "confirmDelete" is the exception: a plain yes/no prompt still takes over
+// as a centered dialog, same as every destructive confirmation elsewhere in
+// the app (see Workspaces' own confirmDeleteWorkspace/confirmDeleteItem).
+function CustomCommandsScreen({
+  commands,
+  onChange,
+  flash,
+  height,
+}: {
+  commands: CustomCommand[];
+  onChange: (next: CustomCommand[]) => void;
+  flash: (text: string) => void;
+  height: number;
+}) {
+  const [mode, setMode] = useState<CustomCommandsMode>({ kind: "list" });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  useEffect(() => {
+    setSelectedIndex((i) => Math.min(i, commands.length));
+  }, [commands.length]);
+
+  // No "esc closes this" here anymore — as a persistent tab (not an
+  // overlay), there's nothing to close back to; switch tabs with 1/2/3
+  // instead. Esc still works as "cancel" for the form/confirm sub-modes
+  // below, unaffected.
+  useInput(
+    (input, key) => {
+      const maxIndex = commands.length; // synthetic "+ Add command" row
+      if (key.downArrow) {
+        setSelectedIndex((i) => Math.min(i + 1, maxIndex));
+      } else if (key.upArrow) {
+        setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (key.return || input === "a") {
+        if (input === "a" || selectedIndex === maxIndex) setMode({ kind: "form", index: null });
+        else setMode({ kind: "form", index: selectedIndex });
+      } else if (input === "d" && selectedIndex < maxIndex) {
+        setMode({ kind: "confirmDelete", index: selectedIndex });
+      }
+    },
+    { isActive: mode.kind === "list" },
+  );
+
+  if (mode.kind === "form") {
+    const existing = mode.index !== null ? commands[mode.index] : undefined;
+    return (
+      <Box flexDirection="row" flexGrow={1} height={height}>
+        <CustomCommandListPane commands={commands} selectedIndex={selectedIndex} active={false} height={height} />
+        <Box width={1} />
+        <CustomCommandForm
+          existing={existing}
+          existingNames={commands.map((c) => c.name)}
+          fullScreen
+          height={height}
+          onSubmit={(command) => {
+            const next = [...commands];
+            if (mode.index !== null) next[mode.index] = command;
+            else next.push(command);
+            onChange(next);
+            setMode({ kind: "list" });
+            flash(`Saved custom command "${command.name}"`);
+          }}
+          onCancel={() => setMode({ kind: "list" })}
+        />
+      </Box>
+    );
+  }
+
+  if (mode.kind === "confirmDelete") {
+    const command = commands[mode.index];
+    return command ? (
+      <Box flexGrow={1} height={height} alignItems="center" justifyContent="center">
+        <ConfirmDialog
+          message={`Delete custom command "${command.name}"?`}
+          onConfirm={() => {
+            onChange(commands.filter((_, i) => i !== mode.index));
+            setMode({ kind: "list" });
+            flash(`Deleted custom command "${command.name}"`);
+          }}
+          onCancel={() => setMode({ kind: "list" })}
+        />
+      </Box>
+    ) : null;
+  }
+
+  // -1: one line reserved below the panes for the hint text, the same way
+  // App reserves a row for its own Footer outside contentHeight.
+  const paneHeight = height - 1;
+  const selectedCommand = selectedIndex < commands.length ? commands[selectedIndex] : undefined;
+
+  return (
+    <Box flexDirection="column" flexGrow={1} height={height}>
+      <Box flexDirection="row" height={paneHeight}>
+        <CustomCommandListPane
+          commands={commands}
+          selectedIndex={selectedIndex}
+          active
+          height={paneHeight}
+        />
+        <Box width={1} />
+        <CustomCommandDetailPane command={selectedCommand} height={paneHeight} />
+      </Box>
+      <Text dimColor>↑↓ select · enter edit · a add · d delete · 1/2/3 tabs · q quit</Text>
+    </Box>
+  );
+}
+
 export function App() {
   const { exit } = useApp();
   const { columns, rows } = useTerminalSize();
 
   const [config, setConfig] = useState<Config>(() => loadConfig());
   const [themesFile, setThemesFile] = useState<ThemesFile>(() => loadThemes());
+  const [activeTab, setActiveTab] = useState<Tab>("workspaces");
   const [pane, setPane] = useState<Pane>("groups");
   const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
@@ -443,12 +707,12 @@ export function App() {
   }, [config]);
 
   // One-time prompt, first run only: only fires for a detected (bash/zsh)
-  // shell, and only until settings.autocompletePrompted is set — the
-  // ConfirmDialog's own onConfirm/onCancel below is what sets it, whichever
-  // way the user answers, so this effect never fires twice.
+  // shell, and only until settings.shellIntegrationPrompted is set — the
+  // ShellIntegrationPrompt's own handlers below are what set it, whichever
+  // of the three ways the user answers, so this effect never fires twice.
   useEffect(() => {
-    if (shell && !getSettings(config).autocompletePrompted) {
-      setOverlay({ kind: "autocompletePrompt", shell });
+    if (shell && !getSettings(config).shellIntegrationPrompted) {
+      setOverlay({ kind: "shellIntegrationPrompt", shell });
     }
     // Mount-only: $SHELL/config are read once, at startup.
   }, []);
@@ -540,6 +804,29 @@ export function App() {
         return;
       }
 
+      // Number-key tab switching works from anywhere (any pane, any depth
+      // in the Workspaces drill-down) as long as no overlay/form is open —
+      // same isActive gate the rest of this handler already has. See the
+      // TabBar component for the visible 1/2/3 -> name mapping.
+      if (input === "1") {
+        setActiveTab("workspaces");
+        return;
+      }
+      if (input === "2") {
+        setActiveTab("customCommands");
+        return;
+      }
+      if (input === "3") {
+        setActiveTab("settings");
+        return;
+      }
+
+      // The rest of this handler is the Workspaces tab's own Groups ->
+      // Workspaces -> Items navigation — Custom Commands/Settings own
+      // their own input handling as separate components, only ever
+      // mounted while their tab is active.
+      if (activeTab !== "workspaces") return;
+
       if (pane === "groups") {
         const maxIndex = groups.length; // synthetic "+ New workspace" row
         if (key.downArrow) setGroupIndex((i) => Math.min(i + 1, maxIndex));
@@ -556,8 +843,6 @@ export function App() {
           setOverlay({ kind: "renameGroup", groupName: groups[groupIndex]!.name });
         } else if (input === "d" && groupIndex < groups.length) {
           setOverlay({ kind: "confirmDeleteGroup", groupName: groups[groupIndex]!.name });
-        } else if (input === "s") {
-          setOverlay({ kind: "settings" });
         }
         return;
       }
@@ -585,6 +870,11 @@ export function App() {
           setOverlay({ kind: "addWorkspace", presetGroup });
         } else if (input === "r" && wsIndex < maxIndex) {
           setOverlay({ kind: "editWorkspace", workspaceName: currentGroupWorkspaces[wsIndex]!.name });
+        } else if (input === "c" && wsIndex < maxIndex) {
+          setOverlay({
+            kind: "duplicateWorkspace",
+            workspaceName: currentGroupWorkspaces[wsIndex]!.name,
+          });
         } else if (input === "d" && wsIndex < maxIndex) {
           setOverlay({
             kind: "confirmDeleteWorkspace",
@@ -670,19 +960,20 @@ export function App() {
     { isActive: overlay === null },
   );
 
-  const contentHeight = Math.max(10, rows - 5);
+  // -7, not -5: Header (3 rows) + the bordered TabBar (3 rows) + Footer (1).
+  const contentHeight = Math.max(10, rows - 7);
 
   const hint = useMemo(() => {
     if (pane === "groups") {
-      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · s settings · ● = open · q quit";
+      return "↑↓ select · enter/→ open group · a new workspace · r rename group · d delete group · ● = open · 1/2/3 tabs · q quit";
     }
     if (pane === "workspaces") {
-      return "↑↓ select · enter/→ open · a add workspace · r rename/move · d delete · ←/esc back · ● = open · q quit";
+      return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · 1/2/3 tabs · q quit";
     }
     if (isSplit) {
-      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · q quit";
+      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · 1/2/3 tabs · q quit";
     }
-    return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · q quit";
+    return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · 1/2/3 tabs · q quit";
   }, [pane, isSplit]);
 
   let overlayNode: React.ReactNode = null;
@@ -732,6 +1023,42 @@ export function App() {
             pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
             flash(`Saved workspace "${name}"`);
+          }}
+          onCancel={() => setOverlay(null)}
+        />
+      ) : null;
+    } else if (overlay.kind === "duplicateWorkspace") {
+      const source = config.workspaces.find((w) => w.name === overlay.workspaceName);
+      overlayNode = source ? (
+        <WorkspaceForm
+          existingNames={config.workspaces.map((w) => w.name)}
+          initialValues={{
+            name: `${source.name}-copy`,
+            group: source.group ?? "",
+            layout: source.layout ?? "single",
+            cwd: source.cwd ?? "",
+            frontendCwd: source.frontendCwd ?? "",
+            backendCwd: source.backendCwd ?? "",
+          }}
+          title={`Duplicate workspace · ${source.name}`}
+          submitLabel="duplicate"
+          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+            const workspace: Workspace = {
+              name,
+              group: group || undefined,
+              layout: layout === "split" ? "split" : undefined,
+              cwd: layout === "single" ? cwd || undefined : undefined,
+              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
+              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
+              items: source.items.map((item) => ({ ...item })),
+            };
+            setConfig((prev) => ({
+              ...prev,
+              workspaces: [...prev.workspaces, workspace],
+            }));
+            pendingSelect.current = { type: "workspace", name };
+            setOverlay(null);
+            flash(`Duplicated workspace as "${name}"`);
           }}
           onCancel={() => setOverlay(null)}
         />
@@ -812,51 +1139,35 @@ export function App() {
           onCancel={() => setOverlay(null)}
         />
       );
-    } else if (overlay.kind === "settings") {
-      const previousSettings = getSettings(config);
-      overlayNode = (
-        <SettingsForm
-          existing={previousSettings}
-          themeNames={themesFile.themes.map((t) => t.name)}
-          activeTheme={themesFile.activeTheme}
-          completionAvailable={shell !== null}
-          onPreviewTheme={setPreviewThemeName}
-          onSubmit={({ settings, theme }) => {
-            if (shell && settings.autocomplete !== previousSettings.autocomplete) {
-              if (settings.autocomplete) installCompletion(shell);
-              else uninstallCompletion(shell);
-            }
-            setConfig((prev) => ({ ...prev, settings }));
-            setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
-            setPreviewThemeName(null);
-            setOverlay(null);
-            flash("Saved settings");
-          }}
-          onCancel={() => {
-            setPreviewThemeName(null);
-            setOverlay(null);
-          }}
-        />
-      );
-    } else if (overlay.kind === "autocompletePrompt") {
+    } else if (overlay.kind === "shellIntegrationPrompt") {
       const rcFileName = path.basename(getRcFilePath(overlay.shell));
+      const rcBlock = shellIntegrationRcBlock(overlay.shell);
       overlayNode = (
-        <ConfirmDialog
-          title="Shell tab-completion"
-          message={`Enable wsm tab-completion for ${overlay.shell}? Adds one line to ${rcFileName} (once) that sources a file wsm manages and keeps up to date.`}
-          onConfirm={() => {
+        <ShellIntegrationPrompt
+          rcFileName={rcFileName}
+          rcBlock={rcBlock}
+          onInsert={() => {
             installCompletion(overlay.shell);
             setConfig((prev) => ({
               ...prev,
-              settings: { ...getSettings(prev), autocomplete: true, autocompletePrompted: true },
+              settings: { ...getSettings(prev), autocomplete: true, shellIntegrationPrompted: true },
             }));
             setOverlay(null);
-            flash("Tab-completion installed — restart your shell to use it");
+            flash("Shell integration installed — restart your shell to use it");
           }}
-          onCancel={() => {
+          onManual={() => {
+            installCompletionFilesOnly(overlay.shell);
             setConfig((prev) => ({
               ...prev,
-              settings: { ...getSettings(prev), autocompletePrompted: true },
+              settings: { ...getSettings(prev), autocomplete: true, shellIntegrationPrompted: true },
+            }));
+            setOverlay(null);
+            flash("Add the shown line to your rc file, then restart your shell");
+          }}
+          onSkip={() => {
+            setConfig((prev) => ({
+              ...prev,
+              settings: { ...getSettings(prev), shellIntegrationPrompted: true },
             }));
             setOverlay(null);
           }}
@@ -883,15 +1194,61 @@ export function App() {
     }
   }
 
+  // Custom Commands and Settings are persistent tabs, not overlays: only
+  // ever mounted while their tab is active (see the main return below),
+  // so switching away and back discards any in-progress, unsaved edit —
+  // same as canceling out of a form already does.
+  const customCommandsNode = (
+    <CustomCommandsScreen
+      commands={config.customCommands ?? []}
+      onChange={(next) => setConfig((prev) => ({ ...prev, customCommands: next }))}
+      flash={flash}
+      height={contentHeight}
+    />
+  );
+
+  const previousSettings = getSettings(config);
+  const settingsNode = (
+    <SettingsForm
+      existing={previousSettings}
+      themeNames={themesFile.themes.map((t) => t.name)}
+      activeTheme={themesFile.activeTheme}
+      completionAvailable={shell !== null}
+      fullScreen
+      height={contentHeight}
+      onPreviewTheme={setPreviewThemeName}
+      onSubmit={({ settings, theme }) => {
+        if (shell && settings.autocomplete !== previousSettings.autocomplete) {
+          if (settings.autocomplete) installCompletion(shell);
+          else uninstallCompletion(shell);
+        }
+        setConfig((prev) => ({ ...prev, settings }));
+        setThemesFile((prev) => ({ ...prev, activeTheme: theme }));
+        setPreviewThemeName(null);
+        flash("Saved settings");
+      }}
+      onCancel={() => {
+        setPreviewThemeName(null);
+      }}
+    />
+  );
+
+  const footerHint = overlay ? "" : activeTab === "workspaces" ? hint : "";
+
   return (
     <ThemeProvider value={activeTheme.colors}>
       <Box flexDirection="column" width={columns} height={rows}>
         <Header width={columns} />
+        <TabBar activeTab={activeTab} width={columns} />
         <Box flexGrow={1} flexDirection="row">
           {overlay ? (
             <Box flexGrow={1} alignItems="center" justifyContent="center" height={contentHeight}>
               {overlayNode}
             </Box>
+          ) : activeTab === "customCommands" ? (
+            customCommandsNode
+          ) : activeTab === "settings" ? (
+            settingsNode
           ) : (
             <>
               {pane === "groups" ? (
@@ -923,7 +1280,7 @@ export function App() {
             </>
           )}
         </Box>
-        <Footer hint={overlay ? "" : hint} message={message} width={columns} />
+        <Footer hint={footerHint} message={message} width={columns} />
       </Box>
     </ThemeProvider>
   );

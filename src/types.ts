@@ -43,15 +43,22 @@ export interface Settings {
   defaultClose?: boolean;
   /** Whether `wsm status` automatically drops session items whose tracked pid is no longer running, instead of just flagging them. Default: false. */
   autoPruneStaleSessions?: boolean;
-  /** Whether wsm has installed shell tab-completion (one rc-file line, plus a completion file wsm manages under the config dir). Default: false. */
+  /** Whether wsm sources shell tab-completion (a completion file wsm manages under the config dir, sourced via the shared wsmrc mechanism — see AGENTS.md). Default: false. */
   autocomplete?: boolean;
-  /** Whether the TUI has already asked once whether to set up autocompletion, so it only ever asks once. Default: false. */
-  autocompletePrompted?: boolean;
+  /** Whether the TUI has already asked once whether to set up shell integration (tab-completion + custom commands), so it only ever asks once. Default: false. */
+  shellIntegrationPrompted?: boolean;
+}
+
+/** A user-defined shell function, e.g. `logs` -> `docker compose logs -f`, made available in the shell (not scoped to any workspace) via `wsm commands` — see AGENTS.md. */
+export interface CustomCommand {
+  name: string;
+  command: string;
 }
 
 export interface Config {
   workspaces: Workspace[];
   settings?: Settings;
+  customCommands?: CustomCommand[];
 }
 
 export interface SessionItem {

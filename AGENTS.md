@@ -86,9 +86,10 @@ src/
   config.ts      load/save ~/.config/workspace-manager/config.yaml
   state.ts       load/save ~/.config/workspace-manager/state.json (open sessions)
   launcher.ts    spawns/kills items for `wsm open`/`wsm close`
-  cli.ts         commander entry point (open/close/list/status/completion; no-args -> TUI)
+  cli.ts         commander entry point (open/close/list/status/completion/commands; no-args -> TUI)
   completion.ts  bash/zsh completion script generation, used by `wsm completion <shell>`
-  completionInstall.ts  installs/uninstalls the completion.ts scripts into the user's shell
+  customCommands.ts  shell-function generation for user-defined custom commands, used by `wsm commands`
+  shellIntegration.ts  installs/uninstalls the completion.ts + customCommands.ts scripts into the user's shell
   theme.ts       load/save ~/.config/workspace-manager/themes.json, built-in themes
   tui/
     App.tsx      Ink app: Groups -> Workspaces -> Items drill-down, all state
@@ -105,52 +106,415 @@ frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
 in which case each item picks a `side`. Single-folder is always the default;
 `layout` is omitted from saved config entirely unless split is chosen.
 
+**Duplicating a workspace** (`c` from the workspace list, i.e. `WorkspaceListPane`
+— a different overlay from the `c` in the items pane, which opens workspace
+settings) reuses `WorkspaceForm` rather than a bespoke component: it's the
+same field set (group/name/layout/cwd or frontendCwd+backendCwd) with a new
+optional `initialValues` prop to seed those fields from the source workspace
+and a `title`/`submitLabel` override, kept deliberately separate from the
+`existing` prop — `existing` is identity ("this literal workspace is being
+edited," so keeping its own name on submit is fine), whereas a duplicate is a
+brand-new workspace that must get a name distinct from every existing one,
+including the source's — reusing `existing` for this would have silently
+punched a hole in that check. The name field is prefilled `"<source>-copy"`
+as a starting point, not auto-uniquified further — if `-copy` is already
+taken, the existing "name already exists" validation catches it like any
+other add. Items are copied with a shallow per-item spread
+(`source.items.map((item) => ({ ...item }))`) so the two workspaces don't
+share item object references; nothing about `WorkspaceItem` is deeply nested
+enough to need more than that.
+
 Tool-wide behavior (as opposed to per-workspace config) lives in an optional
 top-level `settings:` key in the same `config.yaml` — not a separate file.
 `config.getSettings(config)` merges it with defaults (`defaultClose: true`,
 `autoPruneStaleSessions: false`, `autocomplete: false`,
-`autocompletePrompted: false`) and is the only place that needs to know
+`shellIntegrationPrompted: false`) and is the only place that needs to know
 those defaults; callers (`cli.ts`, `App.tsx`) always go through it rather
 than reading `config.settings` directly, so a missing/partial `settings:`
 key never needs an `undefined` check at the call site. Edited via the TUI's
-Settings overlay (press "s" from the Groups pane) — see `SettingsForm` in
-`Form.tsx`, which reuses `Form`'s existing "select" field kind (two options,
-cycled with ←→) for each boolean rather than introducing a new field kind.
+Settings tab (press "3" — see the Tab system section below) — see
+`SettingsForm` in `Form.tsx`, which reuses `Form`'s existing "select" field
+kind (two options, cycled with ←→) for each boolean rather than introducing
+a new field kind.
 
-Shell tab-completion setup (`completionInstall.ts`) deliberately edits the
-user's rc file (`~/.zshrc`/`~/.bashrc`) *at most once, ever* — not the more
-common pattern of an `eval "$(tool init shell)"` line the user pastes in
-themselves, and not re-editing the rc file on every `wsm update`. Instead,
-`installCompletion(shell)` writes a small managed file under the config dir
-(`getCompletionScriptPath`, e.g. `completion.zsh`) whose only content is
-`eval "$(wsm completion <shell>)"`, then adds one marker-wrapped block to
-the rc file (`# >>> wsm completion >>> ... # <<< wsm completion <<<`) that
-sources *that file* — guarded by `[ -f ... ]` so a deleted config dir can't
-break shell startup. Because the rc line only ever sources a fixed path, the
-rc file never needs a second edit: `wsm completion <shell>` re-runs fresh
-every time a new shell starts (same "stays in sync automatically" property
-`completion.ts`'s scripts already have — see below), so nothing about the
-*content* wsm would want to change ever requires touching the rc file
-again. `installCompletion` is idempotent and safe to call on every `wsm
-update` (via `refreshInstalledCompletion`, gated on `settings.autocomplete`)
-and every time the TUI's Settings overlay saves with the field still on —
-it always rewrites the managed completion file (self-healing if deleted)
-but only touches the rc file the first time, detected via the marker.
-`uninstallCompletion` reverses both, restoring the rc file's surrounding
-content byte-for-byte (verified in `test/completionInstall.test.ts` by
-round-tripping install → uninstall against seeded rc content).
+Shell integration (`shellIntegration.ts`, renamed from the narrower
+`completionInstall.ts` once it grew a second feature — see custom commands
+below) deliberately edits the user's rc file (`~/.zshrc`/`~/.bashrc`) *at
+most once, ever* — not the more common pattern of an `eval "$(tool init
+shell)"` line the user pastes in themselves, and not re-editing the rc file
+on every `wsm update`. Unlike the original single-file version of this
+mechanism, the rc line now sources a *layered* structure so more managed
+features can be added later without ever asking for a second rc edit:
+
+```
+rc file  --(one line, one-time edit)-->  wsmrc.<shell>  --sources-->  completion.<shell>
+                                                          --sources-->  commands.sh
+```
+
+`installCompletion(shell)` writes `wsmrc.<shell>` (`getWsmRcScriptPath`,
+via `ensureManagedShellFiles`) whose only content is two `[ -f ... ] &&
+source ...` guards, one for `completion.<shell>` and one for the shared
+`commands.sh` (see custom commands below) — each guard independently no-ops
+if that file doesn't exist, so a feature that's off, or a deleted config
+dir, can't break shell startup. It then writes `completion.<shell>` itself
+(unchanged from before: `eval "$(wsm completion <shell>)"`) and adds one
+marker-wrapped block to the rc file (`# >>> wsm >>> ... # <<< wsm <<<`,
+generalized from the old completion-only markers) that sources *wsmrc.
+<shell>* — never completion.<shell> directly anymore. Because the rc line
+only ever points at that one fixed path, and everything it might need to
+source is decided inside wsmrc.<shell> (which wsm freely rewrites, same as
+any other managed file), adding a third managed feature later still won't
+need a second rc edit — only wsmRcFileContents' own output changes.
+`wsm completion <shell>` itself still re-runs fresh every shell start (same
+"stays in sync automatically" property `completion.ts`'s scripts already
+have — see below), so nothing about completion's own *content* ever
+touches a file on disk at all beyond that one static eval line.
+
+`installCompletion` is idempotent and safe to call on every `wsm update`
+(via `refreshInstalledCompletion`, gated on `settings.autocomplete`) and
+every time the TUI's Settings tab saves with the field still on — every
+managed file is always rewritten (self-healing if deleted), but the rc file
+itself is only touched when its current-marker block isn't already
+present. That includes **migrating** a leftover pre-upgrade block: if an rc
+file still has the old `# >>> wsm completion >>>` block (sourcing
+completion.<shell> directly, from before this layering existed), installing
+again swaps it for the new wsmrc-sourcing block instead of leaving both
+present — verified in `test/shellIntegration.test.ts` against a real
+seeded old-style block, and manually confirmed against this repo's own
+`workspace-manager-dev` dev-rc file, which really did still have one from
+before this feature existed. `uninstallCompletion(shell)` now only removes
+`completion.<shell>` — deliberately **not** the rc file or wsmrc.<shell>
+anymore, since custom commands' sourcing lives behind the same pipe and
+must keep working even after tab-completion is turned off; the old
+version's "restore the rc file byte-for-byte" behavior no longer applies
+because uninstalling completion no longer touches the rc file at all. For
+the "insert yourself" prompt path (below), `installCompletionFilesOnly`
+does everything `installCompletion` does *except* the rc-file part —
+`shellIntegrationRcBlock(shell)` is the pure function that computes the
+exact block text so the TUI can both display it and (in the auto-insert
+path) actually write it, guaranteed to match.
 
 The TUI prompts once, on first run, to opt in (`App.tsx`'s mount effect,
-gated on `settings.autocompletePrompted`) — a `ConfirmDialog`, not a
-`SettingsForm` field, since nothing has been configured yet to *put* in a
-settings screen. Whichever way the user answers, `autocompletePrompted` is
-set so it never asks again; the choice is also editable later from the
-Settings overlay (`SettingsForm`'s `completionAvailable` prop hides the
+gated on `settings.shellIntegrationPrompted`, renamed from
+`autocompletePrompted` now that the prompt covers more than completion —
+existing users who already dismissed the old prompt will see this one once
+more, which is an intentional, harmless consequence of the rename, not a
+bug) — a dedicated `ShellIntegrationPrompt` (`ConfirmDialog.tsx`), not a
+`ConfirmDialog` or a `SettingsForm` field, since it needs a third outcome
+beyond confirm/cancel: "insert it for me" (`installCompletion`), "I'll
+insert it myself" (`installCompletionFilesOnly`, plus showing
+`shellIntegrationRcBlock`'s text so there's something to copy from the
+terminal), or skip. All three set `shellIntegrationPrompted` so it never
+asks again; the choice is also editable later from the Settings tab
+(`SettingsForm`'s `completionAvailable` prop hides the "Shell completion"
 field entirely when `detectShell()` returns null, since there'd be nothing
 to toggle). The prompt only fires for a detected shell (bash/zsh, same
 scope as `completion.ts`) — see `paths.ts`'s `getRcFilePath` for how that
 detection and the rc file path itself stay wsm/wsmdev-sandboxed, same
 reasoning as `getConfigDir` in the Lessons learned section below.
+
+**Custom commands** (`src/customCommands.ts`, `CustomCommand[]` in
+`config.customCommands`, top-level like `workspaces` rather than nested
+under `settings` since it's a growable list of named entries, not a
+setting) are user-defined shell functions available in every new terminal,
+independent of any workspace — e.g. a `logs` shortcut for `docker compose
+logs -f "$@"`, or a full multi-line function pulled out of someone's rc
+file to stop it cluttering every project's config. `customCommandsScript
+(commands)` generates one POSIX shell function per entry, wrapping `command`
+as the literal function *body*, embedded byte-for-byte — `name() {\n
+<command>\n}`. This used to re-indent the body (two spaces on every
+non-blank line) for readability — removed as a real bug, not just a style
+choice: indenting an arbitrary shell body isn't safe in general, since it
+silently breaks a heredoc's terminator (which must land at an exact
+column, unindented unless the heredoc used `<<-`) and would inject
+whitespace into any multi-line string literal's continuation lines. Found
+via a real custom command that used a heredoc (`osascript <<APPLESCRIPT
+...APPLESCRIPT`, pulled from an actual rc file) — the indented terminator
+no longer matched, so the shell kept reading past it looking for a real
+one, corrupting the rest of the generated script; `zsh -n`/`bash -n`
+against `wsm commands`' output is what caught it. Regression-tested in
+`test/customCommands.test.ts` with exactly that heredoc shape. Deliberately **no** automatic
+"$@" forwarding: earlier versions of this feature auto-appended it after a
+single command line, but that only works for a bare one-liner — it breaks
+immediately for a real multi-line body (appending `"$@"` after a body's
+last line, e.g. a closing `fi`, isn't valid shell), so the field had to
+become "the exact body, write your own $@/$1 handling" to support anything
+beyond the simplest case. `customCommandsScript` is deliberately lenient
+about the *name*, though: an entry with an invalid one (checked against
+`isValidCustomCommandName`, the same rule the TUI form enforces at creation
+time — `[A-Za-z_][A-Za-z0-9_-]*`, i.e. a shell *function* name, not the
+stricter variable-identifier rule; bash/zsh both accept hyphens in function
+names, e.g. `vscode-close-here` — a real function pulled from an actual rc
+file while testing this feature, which silently vanished from `wsm
+commands`' output entirely before this was loosened, since the original,
+stricter pattern rejected it and `customCommandsScript` skips invalid names
+rather than erroring) is silently skipped rather than thrown on,
+because this runs on *every shell startup* via `commands.sh`'s
+`eval "$(wsm commands)"` — an exception here would break the eval and lock
+someone out of their shell over one bad hand-edited config.yaml entry, far
+worse than just not getting that one function. `commands.sh` is shared
+across bash and zsh (`getCustomCommandsScriptPath`, no shell parameter),
+unlike completion.<shell>, because a plain shell function definition has no
+bash/zsh syntax split to account for — there's nothing here like
+completion's `compgen`/`compdef` API difference.
+
+The TUI's `CustomCommandForm` Command field is a real, multi-line editor —
+`Form.tsx`'s `FieldDef.kind` gained a third value, `"multiline"`, alongside
+`"text"`/`"select"`. This went through two designs before landing:
+
+1. First, the field was plain `"text"` and anything multi-line had to be
+   hand-authored in `config.yaml`, reasoning that a real editor would be a
+   much larger change to `Form`'s keystroke model. In practice the only way
+   to add a newline was pasting one in, which "worked" only by accident (a
+   paste containing raw `\n` bytes gets appended into the value like any
+   other input) and was fragile enough to produce doubled blank lines.
+2. Then, a `"multiline"` kind was added where `key.tab` (a no-op everywhere
+   else) meant "save," freeing `key.return` to always mean "insert a
+   newline" on this one field. This worked but was rejected on UX grounds:
+   it made `enter`'s meaning inconsistent depending on which field had
+   focus, for no reason visible to someone just using the form.
+
+The field is **modal** instead: `key.return` and `key.escape` mean the same
+thing they do on every other field — advance-or-submit, and cancel the
+form — *until* you actually start typing into it. Typing anything else
+(a character, backspace, ctrl+u) flips a per-form `multilineEditing` state
+true and applies that same keystroke as the first edit, rather than
+requiring a separate "start editing" key. From then on, within this one
+field, `key.return` inserts a literal `"\n"` instead of advancing, and
+`key.escape` exits back to the non-editing state (not canceling the form)
+instead of the global cancel — so `esc` then `enter` is "stop editing, now
+save." `applyMultilineKeystroke` holds the character-editing logic (append/
+backspace/ctrl+u) shared by both states, since only what enter/esc *do*
+differs between them, not how a character gets typed. `multilineEditing`
+resets to `false` on every focus change, so arriving at (or back at) the
+field always starts in the non-editing state. Every other field kind
+(`ItemForm`/`WorkspaceForm`/`RenameGroupForm`/`SettingsForm`'s `"text"`/
+`"select"` fields) is completely untouched by this — `key.tab` reverted to
+being a no-op everywhere, including on an unedited multiline field, exactly
+as it always was.
+
+Rendering follows the same state: the value's text (and its cursor block)
+render in the form's accent color only while `multilineEditing` is true for
+the focused field, plain `theme.text` otherwise — a real color change, not
+just the hint line, so "am I currently typing into this" has an answer
+that's visible without reading the footer.
+
+**The multiline field has a real, movable cursor — left/right/up/down —
+unlike every other field in this form, which are still append/backspace-
+at-the-end only.** This wasn't in the first cut of the multiline field: it
+initially reused the same append-only model as `"text"` fields, on the
+reasoning that arrow keys were already spoken for (up/down for field
+navigation, left/right for `"select"` cycling) and interior movement would
+be a bigger change. That held up fine for a short single-line value, but
+was a real usability problem for a multi-line function body — with no way
+to move the cursor at all, fixing a typo on an earlier line meant
+backspacing through everything typed after it and retyping. Fixed by
+giving multiline fields their own cursor, `multilineCursor` — a flat
+character offset into the value (including embedded `"\n"`s), so moving it
+left/right by one naturally crosses line boundaries with no special-casing;
+`multilineCursorLineCol`/`multilineCursorVerticalMove` (top of `Form.tsx`)
+convert that flat offset to/from a `{ line, col }` pair for up/down
+movement (column-preserving, clamped rather than wrapped, same as any text
+editor) and for rendering the cursor on the right line. Insert/backspace
+now operate *at* the cursor (`value.slice(0, pos) + x + value.slice(pos)`)
+rather than always at the end.
+
+This only applies while `multilineEditing` — arrow keys otherwise keep
+their pre-existing meaning (field navigation / select cycling), completely
+unrelated to and unaffected by this. Left/right/up/down are still reserved
+globally the same way they always were; nothing here touches `"text"` or
+`"select"` fields.
+
+`multilineCursor` is a **ref**, not `useState` — deliberately, and for the
+same underlying reason `onChange` is always a functional updater (see the
+`FieldUpdater` comment above): Ink can deliver several keystrokes from one
+stdin chunk before a render commits, and inserting/deleting "at the cursor"
+needs the position left by the *previous* keystroke in that same burst,
+read synchronously, to compute the next slice correctly. A `useState`
+setter's functional form (`setCursor(prev => ...)`) would still correctly
+sequence multiple queued updates against *itself* — exactly how `onChange`
+already handles rapid typing — but that doesn't help here, because the
+value string (owned by the caller, updated via `onChange`) and the cursor
+position are two *separate* pieces of state, and computing the value's next
+slice needs to read "the current position" synchronously, not from inside
+some other state updater's own callback that runs later. A ref mutates
+immediately and is visible to the very next keystroke's handler invocation
+even if no render has happened in between, which a captured `useState`
+value can't offer. `cursorRenderTick` (a throwaway `useState<number>`,
+bumped on every pure cursor move) exists only to force a re-render for
+arrow-key-only movement, which doesn't otherwise touch `values` and so
+wouldn't cause one on its own — inserting/deleting text doesn't need this,
+since the accompanying `onChange` call already triggers a render.
+
+The "am I currently in edit mode" flag needs the exact same ref treatment,
+for the exact same reason — see the Lessons learned entry below for the
+real bug this caused before `multilineEditingRef` existed (a large paste
+could partially process against a stale "not editing yet" read and corrupt
+itself). `multilineEditing` (`useState`) still exists, purely to drive
+rendering, kept in sync via a small `setEditing` helper that writes both.
+
+Hand-authoring a multi-line body directly in `config.yaml` (a YAML block
+scalar) still works exactly as before and is just as valid a path — the
+round trip through `saveConfig`/`loadConfig` (plain `js-yaml` `dump`/`load`,
+no special handling needed) preserves the embedded newlines exactly,
+verified in `test/config.test.ts`. But it's no longer the *only* path for
+anything beyond a single line, which was the actual point of the feature
+generalizing past single-line passthrough commands in the first place.
+
+`CustomCommandsScreen`'s list view needed a matching fix once bodies could
+be multi-line: it used to render `c.command` directly into one `<Text>`,
+which worked when every command was one line but breaks for a multi-line
+value — the embedded `"\n"` still splits it into multiple rendered rows,
+but the continuation rows lose the row's own leading indent and land flush
+against the box border, which — confirmed with a real pty run against
+`wsmdev`, not just `ink-testing-library`'s static `lastFrame()` snapshot —
+visibly corrupted the surrounding box's borders for at least one frame
+(`ink-testing-library` didn't catch this on its own; it renders a fresh
+static snapshot per call rather than the incremental terminal diff a real
+render does, so the specific glitch only showed up against a real
+terminal). Fixed by showing only `command.split("\n")[0]` plus a trailing
+`" …"` when there's more — the list is a preview, not the editor. If you
+touch list rendering for anything else here, keep it constrained to
+single-line rows for the same reason; don't feed a value that might contain
+embedded newlines into a plain `<Text>` and assume word-wrap will handle it
+— word-wrap and an embedded literal `\n` are different things in Ink.
+
+Even after that fix, a real pty run still shows a one-frame border-overlap
+glitch specifically on the transition into/out of `CustomCommandsScreen`
+when its content height changes a lot (e.g. saving a command and landing
+back on a list with several entries). Ruled out as a regression from this
+feature specifically: the same kind of transition through an unrelated,
+pre-existing overlay (submitting `WorkspaceForm` and landing back on a
+very differently-sized two-pane layout) renders cleanly, with no glitch, in
+the same kind of real-pty check. The likely cause is that every overlay in
+`App.tsx` is wrapped in a `justifyContent="center"`d `Box` (see the
+`overlayNode` render near the bottom of `App.tsx`), so a large height swing
+between one overlay's content and the next re-centers the box at a very
+different starting row, which is harder for Ink's terminal-diffing to patch
+cleanly than the Groups/Workspaces panes' fixed-position layout — Custom
+Commands just happens to produce one of the largest such swings (a short
+add-command form to a list of often-multi-line entries). It's cosmetic and
+self-heals on the very next render; left as a known quirk rather than
+chased further, since fixing it for real would mean addressing how centered
+overlays behave across large height changes in general, not something
+specific to this feature.
+
+The TUI screen (`CustomCommandsScreen` in `App.tsx`) is a self-contained
+component with its own internal list/form/confirm-delete modes rather than
+three separate top-level `Overlay` kinds, since unlike the
+Groups→Workspaces→Items drill-down this is just one flat list.
+
+## Tab system (Workspaces / Custom Commands / Settings)
+
+The TUI has a persistent tab bar (`TabBar` in `App.tsx`, rendered between
+`Header` and the main content area) switching between three top-level
+views — `1` Workspaces, `2` Custom Commands, `3` Settings — via
+`App`'s own `activeTab` (`Tab = "workspaces" | "customCommands" |
+"settings"`) state. Number keys were chosen deliberately over adding more
+mnemonic letters: Custom Commands and Settings both used to be opened with
+"c"/"s" from the Groups pane specifically (an `Overlay` kind each,
+`{ kind: "customCommands" }`/`{ kind: "settings" }`), which meant (a) the
+set of keys that did something depended on which pane you happened to be
+looking at, and (b) the Groups pane's own hint line kept growing as more
+top-level destinations got bolted onto it as more letters. As tabs,
+they're reachable the same way from anywhere in the app (any pane, any
+depth in the Workspaces drill-down) with a fixed, visible set of bindings
+that never changes meaning — the tab bar's own labels (e.g. "2 Custom
+Commands") are the documentation for what the number does, so there's
+nothing to separately memorize. `1`/`2`/`3` are handled at the very top of
+`App`'s global `useInput` (still gated `isActive: overlay === null`, same
+as every other global key), before any pane-specific logic — pane logic
+then early-returns entirely when `activeTab !== "workspaces"`, since
+Custom Commands and Settings own their input handling as separate
+components, only ever mounted while their own tab is active. "c"/"s" go
+back to meaning only what they already meant *within* the Workspaces tab
+(duplicate/edit-workspace-settings for "c", nothing reserved for "s") —
+removing them as Groups-pane shortcuts wasn't a compatibility break so
+much as undoing an overload that had crept in.
+
+Custom Commands and Settings render exactly the way these used to render
+as overlays — the same centered `<Box alignItems="center"
+justifyContent="center">` wrapper, just keyed off `activeTab` instead of
+`overlay` — so `CustomCommandsScreen`/`SettingsForm` needed no internal
+changes to become tab content. Switching away and back **remounts** them
+(`activeTab === "customCommands" ? <CustomCommandsScreen .../> : ...`),
+discarding any in-progress, unsaved edit exactly like canceling out of a
+form already did — this is deliberate, not a gap: there was no "leave a
+half-filled form and come back to it" affordance before, and tabs don't
+introduce one. `CustomCommandsScreen` no longer has an `onClose` prop or
+an `key.escape` handler in its list mode — there's nothing to "close" back
+to now that it isn't modal; esc still cancels its form/confirm-delete
+sub-modes, unaffected. The Workspaces tab's own navigation state (`pane`,
+`groupIndex`, `wsIndex`, `itemIndex`, `itemColumn`) lives in `App` itself,
+not inside the conditionally-rendered pane components, so switching away
+to another tab and back *does* preserve exactly where you were in the
+drill-down — verified in `app.test.tsx`.
+
+The outer `Footer`'s hint line is blanked (`""`) whenever `activeTab !==
+"workspaces"`, same treatment overlays already got — Custom Commands and
+Settings each render their own hint line inside their own box instead.
+The Groups-pane hint no longer mentions "s"/"c" for these two, and gained
+a `1/2/3 tabs` mention instead (shown on every Workspaces-tab hint line,
+not just the Groups one, since the tabs are reachable from any of the
+three panes).
+
+The centered-overlay box-height-transition glitch documented above (a
+one-frame border-overlap artifact on a large height swing, self-heals
+immediately) also shows up on tab switches now, for the same underlying
+reason — switching into Custom Commands or Settings can be just as large a
+height change as opening the overlay version used to be. Same conclusion:
+cosmetic, not chased further, not specific to this feature.
+
+**Custom Commands and Settings were later upgraded from small centered boxes
+to the same full-screen treatment Workspaces always had** — Workspaces is
+the reference layout (sidebar list pane + flexGrow main panel, both given
+an explicit `height={contentHeight}` prop rather than relying on flexGrow
+alone for vertical sizing, per the note above). Custom Commands now has a
+`CustomCommandListPane` (command names + a synthetic "+ Add command" row,
+styled exactly like `WorkspaceListPane`) and a `CustomCommandDetailPane`
+(the selected command's full body, one `<Text>` per line, never truncated
+— unlike the old single-box list, which truncated a multi-line body to its
+first line specifically to avoid corrupting *that* box's layout; a
+dedicated main panel doesn't have that problem, so the truncation and its
+regression test both went away).
+
+`CustomCommandsScreen`'s "form" mode (add/edit) renders **inline in the
+main panel**, not as a centered dialog: the sidebar (`CustomCommandListPane`,
+passed `active={false}` so it dims — border/title/row-highlight all drop to
+their inactive colors, same as `WorkspaceListPane` when focus has moved
+into the items pane) stays on screen next to `CustomCommandForm`, which
+takes over the space `CustomCommandDetailPane` otherwise occupies. This was
+a deliberate correction after first shipping it as a centered dialog (like
+Workspaces' own add/edit overlays) — editing a thing on the same part of
+the screen that displays it reads as more direct than a modal covering the
+whole tab, once there's a main panel to edit *in*. `mode.kind ===
+"confirmDelete"` is the one exception left as a full centered dialog
+(covering the sidebar too, via its own `alignItems="center"
+justifyContent="center"` wrapper) — a plain yes/no prompt has no "part of
+the screen it shows usually" to be inline *in*, so it stays consistent with
+every other destructive confirmation in the app (Workspaces'
+`confirmDeleteWorkspace`/`confirmDeleteItem`, both rendered as `overlayNode`
+in `App.tsx`). The rule of thumb this settled on: a browsing view (a list
+of things) gets the sidebar+main layout, and so does *editing* one of those
+things, in the main panel's own space; only a transient yes/no prompt with
+no natural "usual" location stays a centered dialog.
+
+Settings has no sidebar (it's one flat form, nothing to browse), so making
+it full-screen meant stretching the form itself rather than adding a
+second pane. `Form` (in `Form.tsx`) gained an optional `fullScreen`/
+`height` pair of props: `fullScreen` swaps the form's outer `Box` from its
+default `width={<= 68, centered by caller>}` to `flexGrow={1}` (plus the
+given `height`), so it fills whatever it's placed directly into — same
+mechanism `ItemPane` already relies on (a `flexGrow` box placed directly as
+a sibling in a parent row that has a definite width, so `flexGrow` has real
+leftover space to expand into — for `SettingsForm` that parent is `App`'s
+top-level content row; for `CustomCommandForm` in "form" mode, it's the row
+inside `CustomCommandsScreen` that also holds the sidebar). Every *other*
+form use (`ItemForm`/`WorkspaceForm`/`RenameGroupForm`, and
+`CustomCommandForm` outside the Custom Commands tab's own inline-edit case)
+leaves `fullScreen` unset and keeps the original capped-width
+centered-dialog look — this was an additive, opt-in change to the shared
+`Form` component, not a behavior change for its other existing callers.
 
 TUI color theming is a *third* file, `~/.config/workspace-manager/themes.json`
 (`{ activeTheme, themes: [{ name, colors }] }`), deliberately separate from
@@ -161,7 +525,7 @@ before theming existed — plus Catppuccin Mocha, Dracula, Nord, Gruvbox Dark,
 Tokyo Night, Solarized Dark); `src/tui/ThemeContext.tsx` is a React context
 (`ThemeProvider`/`useTheme()`) that every color-bearing component in
 `App.tsx`/`Form.tsx`/`ConfirmDialog.tsx` reads from — there is no
-prop-drilling. Switching is TUI-only, from the same Settings overlay (theme
+prop-drilling. Switching is TUI-only, from the Settings tab (theme
 is a field in `SettingsForm`, wired through an `onPreviewTheme` callback so
 changing the value applies it live via `App`'s `previewThemeName` state,
 before the field is submitted — canceling clears the preview and reverts to
@@ -228,6 +592,69 @@ banner, etc.) before the actual command's output — don't mistake that for
 the log capture being broken.
 
 ## Lessons learned (don't regress these)
+
+- **A multiline `Form` field's "am I currently editing" check must be read
+  from a ref, never from the `useState` value, inside `useInput`'s
+  handler.** Real bug, found by actually pasting a large (~25-line)
+  multi-line function into the Custom Commands' Command field over a real
+  pty — a case `ink-testing-library`'s `stdin.write()` couldn't reproduce at
+  all (it delivers a whole string, embedded newlines included, as one
+  atomic event; a real terminal paste does not, and Ink processes it across
+  several of its own internal render cycles). Before the fix, `Form.tsx`'s
+  `useInput` decided "not editing yet vs. already editing" by reading the
+  `multilineEditing` `useState` value directly — some portion of a large
+  paste got processed while that read was still stale (Ink hadn't yet
+  committed the render that would have made it `true`), so those characters
+  fell through to the *not-yet-editing* branch instead: an embedded
+  newline there calls `advanceOrSubmit` (submit/close the form, mid-paste)
+  instead of inserting a line, and that branch's `multilineCursor.current =
+  (values[field.key] ?? "").length` line — meant to run exactly once, the
+  moment editing starts — re-ran on every one of those stale passes,
+  yanking the cursor back to the same stale position each time. Net effect:
+  large pastes exited the form partway through and saved scrambled,
+  merged-together lines — while a short paste (a handful of lines) or
+  ordinary typing never triggered it, since those fit in however much a
+  single Ink render cycle actually covers. Fixed by adding
+  `multilineEditingRef` (a ref) as the thing `useInput` actually branches
+  on, with the `useState` twin (`multilineEditing`) demoted to feeding
+  render output only (color, hint text) — mutating a ref is visible
+  immediately to the very next call, however Ink chooses to schedule
+  renders in between, exactly the same reasoning `multilineCursor` (see
+  Architecture above) already relied on ref for. Verified fixed against the
+  exact real-pty repro that showed the corruption; the underlying data is
+  now byte-for-byte correct even though Ink's on-screen repaint can still
+  visibly stutter for the duration of a very large paste — that residual
+  stutter is cosmetic (self-heals once the burst ends) and wasn't chased
+  further, same category as the overlay-transition glitch documented above.
+  **No Jest regression test exists for this** — deliberately: the bug is
+  about Ink's real internal render scheduling under a genuinely large,
+  fast input burst, which `ink-testing-library` does not reproduce (confirmed
+  by trying); rely on a real-pty check (a large multi-line paste into a
+  multiline field) if you touch this logic again.
+
+- **A pasted line break can arrive as a literal `"\r"` inside `input`,
+  not as a discrete `key.return` keypress — the multiline field's insert
+  path has to normalize it.** Found immediately after the bug above, from
+  the *same* real paste, once that one was fixed: the corrupted-merged-
+  lines symptom was gone, but the saved value now had literal `\r`
+  characters where line breaks should be — a completely different failure
+  mode from the same repro, meaning fixing the first bug uncovered a
+  second one sitting behind it. Some terminals send a pasted line break as
+  `"\r"` (the same byte a real Enter key sends) rather than forwarding the
+  clipboard's literal `"\n"` — indistinguishable, from the terminal's own
+  point of view, from someone rapidly typing text and pressing Enter after
+  each line. When that `"\r"` lands folded into a longer `input` string
+  (part of a paste) rather than arriving as its own isolated keypress, Ink
+  reports it as plain text with `key.return` unset, so it never reached the
+  discrete-Enter handling that already turns a real `key.return` into
+  `"\n"`. Fixed in `applyMultilineKeystroke`'s plain-character branch by
+  normalizing `input.replace(/\r\n?/g, "\n")` before inserting — covers a
+  lone `"\r"` and a `"\r\n"` pair the same way, whatever the source
+  terminal sent. Unlike the bug above, **this one is fully covered by a
+  Jest test** (`app.test.tsx`, "arrives as a literal \r") — the normalization
+  is about the *content* of a given `input` string, not about Ink's render
+  timing, so `ink-testing-library`'s `stdin.write()` (which delivers a whole
+  string as one atomic event) reproduces it exactly like a real terminal would.
 
 - **Launch/close commands run via `$SHELL -i -c "<command>"`, not
   `shell: true`.** `child_process`'s `shell: true` uses a bare `/bin/sh`,
@@ -543,15 +970,15 @@ to CommonJS by Babel, or it breaks.
   for enter, etc.), then asserts on `lastFrame()` text and/or the persisted
   `config.yaml`. `await flush()` (a small `setTimeout`) between keystrokes
   gives React a tick to commit before the next one. The outer `describe`'s
-  `beforeEach` deletes `process.env.SHELL` — the one-time autocomplete-setup
-  `ConfirmDialog` (see Architecture above) only fires when a shell is
-  detected, and it appears *before* any other overlay on mount, so leaving
-  a real `$SHELL` set would silently swallow the first keystroke of every
-  other test in the file (routed to the prompt's y/n handler instead of
-  wherever the test meant it to go) rather than failing loudly. The
-  dedicated `"Autocomplete setup"` describe block re-sets `SHELL` (plus
-  `WSM_RC_FILE`, pointed at a scratch file — never the real rc file) in its
-  own `beforeEach` to actually exercise the prompt.
+  `beforeEach` deletes `process.env.SHELL` — the one-time
+  `ShellIntegrationPrompt` (see Architecture above) only fires when a shell
+  is detected, and it appears *before* any other overlay on mount, so
+  leaving a real `$SHELL` set would silently swallow the first keystroke of
+  every other test in the file (routed to the prompt's y/m/n handler
+  instead of wherever the test meant it to go) rather than failing loudly.
+  The dedicated `"Shell integration setup"` describe block re-sets `SHELL`
+  (plus `WSM_RC_FILE`, pointed at a scratch file — never the real rc file)
+  in its own `beforeEach` to actually exercise the prompt.
 
 Before `app.test.tsx` existed, TUI changes were verified with one-off Python
 scripts driving a real pseudo-terminal (`pty.openpty()` + raw keystroke

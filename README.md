@@ -71,6 +71,7 @@ wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
 wsm update              # downloads and installs the latest release, in place
 wsm completion <shell>  # prints a completion script for bash or zsh (usually set up for you, see below)
+wsm commands            # prints shell functions for your configured custom commands (see below)
 ```
 
 `wsm update` only works on a real release install (see "From a release"
@@ -78,29 +79,85 @@ above) — it refuses to run on a development build (`wsmdev`), which updates
 via `npm run build` instead.
 
 The first time you launch the TUI (`wsm`, no args), it offers to set up
-tab-completion for bash/zsh. Accepting adds one line to your shell rc file
-(`~/.zshrc`/`~/.bashrc`) that sources a small file wsm manages — nothing
-else about your rc file ever needs to change after that, including on
-future `wsm update`s. Declined it, or want to turn it on/off later? Toggle
-"Shell completion" from the Settings overlay (`s` from the Groups pane).
-Prefer to wire it up yourself instead of going through the prompt? `wsm
-completion zsh` / `wsm completion bash` prints the completion script
-directly, the same one the automatic setup uses.
+**shell integration**: tab-completion for bash/zsh, plus any custom commands
+you define (see below). Accepting adds one line to your shell rc file
+(`~/.zshrc`/`~/.bashrc`) that sources a small "wsmrc" file wsm manages;
+that file in turn sources the completion script and your custom commands
+separately, so nothing about the rc file itself ever needs to change again,
+even as more managed pieces get added later. You get three choices:
+insert the line automatically, show it so you can paste it in yourself (if
+you'd rather review it first, or manage your rc file some other way), or
+skip for now — any of the three means you won't be asked again, but you can
+still toggle "Shell completion" on/off later from the **Settings** tab
+(press `3`). Prefer to wire things up entirely by hand? `wsm
+completion zsh` / `wsm completion bash` and `wsm commands` print the exact
+scripts the managed setup uses.
+
+### Custom commands
+
+Press `2` to switch to the **Custom Commands** tab — shell
+functions available in every new terminal, independent of any workspace.
+Each has a name (must be a valid shell function name: letters, digits,
+underscore, hyphen, not starting with a digit or hyphen) and a command, which becomes
+the exact body of the generated function:
+
+```
+logs() {
+  docker compose logs -f "$@"
+}
+```
+
+The command is used verbatim, with no automatic argument forwarding, so
+include `"$@"` yourself if you want passthrough args (e.g. `logs -n 50`).
+This is what makes richer functions possible too — not just single
+commands, but a full body with local variables and control flow, e.g. a
+function that only makes sense to keep in one place instead of pasted into
+every project's rc file:
+
+```yaml
+customCommands:
+  - name: vscode-close-here
+    command: |
+      local dir="${1:-$PWD}"; dir="${dir%/}"
+      local pid
+      pid=$(lsof -nP -a -d cwd -c Code 2>/dev/null | awk -v d="$dir" '$NF==d{print $2; exit}')
+      [ -z "$pid" ] && { echo "No VS Code window has $dir open."; return 0; }
+      kill "$pid"
+```
+
+The TUI's Command field supports this directly. Landing on it, `enter`
+behaves like on any other field (saves/moves on); typing anything else
+starts editing it, and from then on `enter` adds a line instead, `←→↑↓`
+move the cursor within the text (so you can go back and fix something
+without retyping everything after it), and `esc` stops editing (without
+closing the form), after which `enter` goes back to saving. The field's
+text turns a different color while you're actively editing it, so it's
+always clear which mode you're in. The same command is just as easy to
+hand-edit into `config.yaml` too (a YAML block scalar, as above), if you'd
+rather write it in an editor. Custom commands only take effect in new
+shells once shell integration's rc
+line is in place (see above) — adding one before that just saves it to
+config for later.
 
 ## Configuring a workspace
 
 Run `wsm` with no arguments to launch the full-screen TUI (built with
-[Ink](https://github.com/vadimdemedes/ink)/React). It's a two-pane dashboard
-with three levels of drill-down: **Groups → Workspaces → Items**.
+[Ink](https://github.com/vadimdemedes/ink)/React). A tab bar across the top
+switches between three top-level views — `1` **Workspaces**, `2` **Custom
+Commands**, `3` **Settings** — from anywhere, so those two don't compete for
+the same mnemonic letters as everything else. Workspaces is a two-pane
+dashboard with three levels of drill-down: **Groups → Workspaces → Items**.
 
 - Left pane starts on **Groups** (e.g. "Work", "Personal") — workspaces
   without a group show up under "Ungrouped". `enter`/`→` on a group reveals
   the workspaces inside it; `←`/`esc` goes back up a level. A green `●` marks
   a group or workspace that's currently open (per `wsm status`).
 - `↑↓` move · `enter`/`→` open · `a` add · `r` rename (workspace form also
-  lets you change/move a workspace's group) · `c` workspace settings (from
-  the items pane) · `d` delete (with confirmation, cascades to everything
-  inside) · `←`/`esc` back · `q` quit
+  lets you change/move a workspace's group) · `c` from the workspace list
+  duplicates the selected workspace (a form seeded from it, including its
+  items, prompting for a new name); `c` from the items pane instead opens
+  workspace settings · `d` delete (with confirmation, cascades to
+  everything inside) · `←`/`esc` back · `q` quit
 - Add items to a workspace — each item is either:
   - **App**: a GUI app to launch, e.g. `code .`, `open -a Ghostty`,
     `open -a "MongoDB Compass" "mongodb://localhost:27017"`
