@@ -453,6 +453,7 @@ export function ItemForm({
     closeStrategy: existing?.close ? "command" : existing ? "none" : "process",
     closeCommand: existing?.close ?? "",
     delayMs: existing?.delayMs ? String(existing.delayMs) : "",
+    tag: existing?.tag ?? "",
   });
   const [error, setError] = useState("");
 
@@ -511,6 +512,12 @@ export function ItemForm({
       });
     }
     base.push({ key: "delayMs", label: "Delay (ms)", kind: "text", placeholder: "0" });
+    base.push({
+      key: "tag",
+      label: "Tag",
+      kind: "text",
+      placeholder: 'optional, e.g. "container" — see wsm open/close <name> <tag>',
+    });
     return base;
   }, [values.type, values.closeStrategy, isSplit]);
 
@@ -538,6 +545,7 @@ export function ItemForm({
       item.close = values.closeCommand.trim();
     }
     if (values.delayMs.trim()) item.delayMs = Number(values.delayMs.trim());
+    if (values.tag.trim()) item.tag = values.tag.trim();
     onSubmit(item);
   };
 

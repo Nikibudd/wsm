@@ -286,6 +286,7 @@ function ItemRow({ item, selected }: { item: WorkspaceItem; selected: boolean })
       <Text {...rowStyle(selected, theme)}>
         {selected ? "› " : "  "}
         {item.name} <Text color={rowStyle(selected, theme, typeColor).color}>[{item.type}]</Text>
+        {item.tag ? <Text dimColor> #{item.tag}</Text> : null}
       </Text>
       <Text dimColor wrap="truncate-end">
         {"    "}launch: {item.launch}

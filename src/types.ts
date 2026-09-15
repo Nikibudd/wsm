@@ -19,6 +19,8 @@ export interface WorkspaceItem {
   close?: string;
   /** Optional pause (ms) after launching before starting the next item. */
   delayMs?: number;
+  /** Optional free-form label (e.g. "container", "editor") for opening/closing a subset of a workspace's items together — see `wsm open <name> <tag>`/`wsm close <name> <tag>`. */
+  tag?: string;
 }
 
 export const UNGROUPED = "Ungrouped";

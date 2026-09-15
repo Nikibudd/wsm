@@ -106,6 +106,15 @@ frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
 in which case each item picks a `side`. Single-folder is always the default;
 `layout` is omitted from saved config entirely unless split is chosen.
 
+An item can also carry an optional free-form `tag` (`ItemForm`'s "Tag"
+field, last in the field list, blank/omitted by default) so a subset of a
+workspace's items can be opened/closed together via `wsm open/close <name>
+<tag>` without touching the rest — see the "Tagged open/close" entry under
+Lessons learned below for why that's a separate code path from the normal
+open/close flow. `App.tsx`'s `ItemRow` shows it inline as `#<tag>` next to
+the item's `[type]` badge when set, so it's visible without opening the
+edit form.
+
 **Duplicating a workspace** (`c` from the workspace list, i.e. `WorkspaceListPane`
 — a different overlay from the `c` in the items pane, which opens workspace
 settings) reuses `WorkspaceForm` rather than a bespoke component: it's the
@@ -878,6 +887,46 @@ the log capture being broken.
   session (the last one opened). This is intentional, not a bug — but it
   reads as surprising ("why did closing print two 'Closing workspace...'
   blocks?") if you don't know it going in.
+
+- **Tagged open/close (`openTaggedItems`/`closeTaggedItems` in
+  `launcher.ts`, `wsm open/close <name> <tag>`) is deliberately its own
+  code path, not a filter bolted onto `openWorkspace`/`closeWorkspaces`.**
+  Added to let a workspace's items carry an optional free-form `tag` (e.g.
+  `container`) so a subset can be closed and reopened together — the
+  motivating case was stopping just a service's docker containers before a
+  test run (which spins up its own) and bringing them back after, without
+  touching the editor/terminal. `openWorkspace`/`closeWorkspaces` are built
+  around *whole-session* semantics (default-close-then-open, `--no-close`
+  stacking, closing every session matching a name, `--all`) that have no
+  meaning for "just these same-workspace items" — reusing them would have
+  meant threading a tag filter through logic that's fundamentally about
+  something else. The tagged functions instead reuse only the low-level
+  per-item pieces (`launchItem`/`closeSessionItem`) directly and do their
+  own light `state.json` bookkeeping: `closeTaggedItems` removes just the
+  matching items from the session (dropping the session entirely once
+  empty, same as `pruneDeadSessions` does); `openTaggedItems` relaunches
+  just the matching items and merges the results into the *existing*
+  session by item name (replacing tagged items, appending previously-unseen
+  ones, leaving every other item's `SessionItem` — pid included — byte-for-
+  byte untouched), or creates a fresh session if the workspace wasn't open
+  at all. Both throw a clear error for an unknown workspace *or* an unknown
+  tag (no items match) — the tag-typo case matters as much as the
+  workspace-typo case, and failing loudly beats silently doing nothing.
+  Deliberately does **not** try to handle multiple stacked sessions for the
+  same workspace name (see "Sessions stack by name" above) — it operates on
+  the first matching session only, since there's no obviously-correct
+  session to pick among several and this feature's whole point is a
+  narrower, simpler operation than full open/close already handle.
+
+  The relaunched items' pids are exactly as reliable (or not) as any other
+  tracked pid — see `itemRunning`'s comment and the "tracked pid is the
+  launcher shell's pid" lesson elsewhere in this file. No special handling
+  was added here for that; a real investigation into this exact question
+  (a user's `docker run -d`/`code .`/`open -a` items all showing dead pids
+  in `wsm status` despite being genuinely open, and despite having explicit
+  `close` commands) concluded the pid is cosmetic once `close` is set —
+  `close` doesn't consult it at all — so there was nothing to preserve here
+  beyond what `openWorkspace` already does for a full open.
 
 - **`cli.ts` itself has no test file — it's just commander wiring.** Keep it
   that way: any actual logic a command needs (string building, script
