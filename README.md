@@ -67,6 +67,8 @@ wsm open <name>         # closes whatever's open, then opens <name>
 wsm open <name> --no-close   # opens <name> without closing anything else
 wsm close [name]        # closes the current (or named) open workspace
 wsm close --all         # closes every currently open workspace
+wsm open <name> <tag>   # (re)opens just that workspace's items sharing <tag>
+wsm close <name> <tag>  # closes just that workspace's items sharing <tag>, leaving the rest open
 wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
 wsm update              # downloads and installs the latest release, in place
@@ -169,6 +171,10 @@ dashboard with three levels of drill-down: **Groups → Workspaces → Items**.
   - Terminate the launched process directly — default for plain background
     commands
   - Leave it running (skip auto-close)
+- Optionally give an item a free-form **Tag** (e.g. `container`) to open/close
+  it together with other same-tagged items via `wsm open/close <name> <tag>`,
+  without touching the rest of the workspace — see "Opening/closing a subset
+  of a workspace" below.
 
 Forms are keyboard-driven: `↑↓` between fields, `←→` to change a dropdown
 value, `enter` to move to the next field (or save on the last one), `esc` to
@@ -229,11 +235,29 @@ workspaces:
         type: command
         launch: docker compose up -d
         close: docker compose down
+        tag: container
       - name: mongo-compass
         type: app
         launch: open -a "MongoDB Compass" "mongodb://localhost:27017"
         close: osascript -e 'tell application "MongoDB Compass" to quit'
 ```
+
+### Opening/closing a subset of a workspace
+
+Give any item(s) a free-form **Tag** (config: `tag`, e.g. `container`) to
+open or close just those items, without touching the rest of the workspace:
+
+```bash
+wsm close acme-api container   # stop just the tagged item(s), e.g. before running tests
+wsm open acme-api container    # bring them back up afterward
+```
+
+This is scoped to the *already-open* workspace's session — it doesn't close
+or reopen anything else in `acme-api`, and it doesn't apply the
+`defaultClose`/`--no-close` logic a plain `wsm open <name>` does. A common
+use: tag the containers a service's tests spin up their own copies of, so
+you can free their ports for the test run and restart them afterward
+without restarting your editor/terminal too.
 
 `close` is just a shell command — `osascript ...` above is one example (macOS
 AppleScript), not something wsm has special support for. See Notes below for

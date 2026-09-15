@@ -224,6 +224,56 @@ describe("App (TUI)", () => {
     expect(items.map((i: any) => i.name)).toEqual(["fe-editor", "fe-dev"]);
   });
 
+  test("an item's tag shows inline in the items pane and round-trips through the edit form", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: epg
+    cwd: /tmp/epg
+    items:
+      - name: Mongo
+        type: command
+        launch: docker run -d mongo
+        close: docker stop mongo
+        tag: container
+`,
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write(ENTER); // enter the (only) group
+    await flush();
+    stdin.write(ENTER); // open epg's items
+    await flush();
+
+    // Shown inline next to the item, not just on the edit form.
+    expect(lastFrame()).toContain("Mongo [command] #container");
+
+    stdin.write(ENTER); // edit Mongo
+    await flush();
+    expect(lastFrame()).toContain("container"); // Tag field prefilled
+
+    // Change the tag and save: Name -> Type -> Launch -> Directory ->
+    // Close via -> Close cmd -> Delay (ms) -> Tag (last field).
+    for (let i = 0; i < 7; i++) {
+      stdin.write(ENTER);
+      await flush();
+    }
+    stdin.write("\x7f".repeat(9)); // clear "container"
+    await flush();
+    stdin.write("db");
+    await flush();
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.workspaces[0].items[0].tag).toBe("db");
+  });
+
   test("left arrow from the frontend column exits back to the workspace list", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(

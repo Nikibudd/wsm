@@ -208,6 +208,101 @@ export async function openWorkspace(name: string, opts: { close?: boolean }): Pr
   await Promise.all(observations);
 }
 
+// Opens/closes only the items in a workspace that share a given `tag` (e.g.
+// "container"), leaving the rest of the workspace's already-open items
+// completely alone — for something like "stop just the containers for a
+// test run, then bring them back up" without touching the editor/terminal.
+// Deliberately NOT built on openWorkspace/closeWorkspaces: those are about
+// whole-session semantics (closing everything before opening, --no-close
+// stacking, closing every session matching a name, etc.) that don't apply
+// to a same-workspace item subset — reusing them would mean threading a
+// tag filter through logic that has nothing to do with tags. This reuses
+// only the low-level per-item pieces (launchItem/closeSessionItem) and does
+// its own light state.json bookkeeping.
+//
+// If a workspace has multiple stacked sessions (via repeated `--no-close`
+// opens — see the "sessions stack by name" lesson in AGENTS.md), only the
+// first matching session is touched. Tagged open/close is aimed at the
+// common case of one open session per workspace; picking a session to
+// operate on among several same-named ones has no obviously-correct answer,
+// so this doesn't try to guess.
+export async function openTaggedItems(name: string, tag: string): Promise<void> {
+  const config = loadConfig();
+  const workspace = findWorkspace(config, name);
+  if (!workspace) {
+    throw new Error(`No workspace named "${name}" found. Run "wsm" to configure one.`);
+  }
+  const taggedItems = workspace.items.filter((item) => item.tag === tag);
+  if (taggedItems.length === 0) {
+    throw new Error(`No items tagged "${tag}" in workspace "${name}".`);
+  }
+
+  console.log(`Opening "${tag}" items in workspace "${name}"...`);
+  const newItems: SessionItem[] = [];
+  const observations: Promise<void>[] = [];
+  for (const item of taggedItems) {
+    console.log(`  → ${item.name}: ${item.launch}`);
+    const { sessionItem, observe } = launchItem(workspace, item);
+    newItems.push(sessionItem);
+    observations.push(observe);
+    if (item.delayMs) await sleep(item.delayMs);
+  }
+
+  const state = loadState();
+  const session = state.sessions.find((s) => s.workspace === name);
+  if (session) {
+    for (const newItem of newItems) {
+      const idx = session.items.findIndex((i) => i.name === newItem.name);
+      if (idx !== -1) session.items[idx] = newItem;
+      else session.items.push(newItem);
+    }
+  } else {
+    state.sessions.push({ workspace: name, openedAt: new Date().toISOString(), items: newItems });
+  }
+  saveState(state);
+  console.log(`"${tag}" items in workspace "${name}" are open (${newItems.length} item(s)).`);
+
+  await Promise.all(observations);
+}
+
+export function closeTaggedItems(name: string, tag: string): void {
+  const config = loadConfig();
+  const workspace = findWorkspace(config, name);
+  if (!workspace) {
+    throw new Error(`No workspace named "${name}" found. Run "wsm" to configure one.`);
+  }
+  const taggedNames = new Set(workspace.items.filter((item) => item.tag === tag).map((item) => item.name));
+  if (taggedNames.size === 0) {
+    throw new Error(`No items tagged "${tag}" in workspace "${name}".`);
+  }
+
+  const state = loadState();
+  const session = state.sessions.find((s) => s.workspace === name);
+  if (!session) {
+    console.log(`Workspace "${name}" is not currently open.`);
+    return;
+  }
+
+  const toClose = session.items.filter((item) => taggedNames.has(item.name));
+  if (toClose.length === 0) {
+    console.log(`No open "${tag}" items in workspace "${name}".`);
+    return;
+  }
+
+  console.log(`Closing "${tag}" items in workspace "${name}"...`);
+  for (const item of [...toClose].reverse()) {
+    const result = closeSessionItem(item);
+    const icon = result.ok ? "✓" : "✗";
+    console.log(`  ${icon} ${item.name}: ${result.message}`);
+  }
+
+  session.items = session.items.filter((item) => !taggedNames.has(item.name));
+  if (session.items.length === 0) {
+    state.sessions = state.sessions.filter((s) => s !== session);
+  }
+  saveState(state);
+}
+
 function isPidAlive(pid: number): boolean {
   try {
     // Signal 0 sends nothing but still throws (ESRCH) if the pid is gone.
