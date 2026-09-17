@@ -1,38 +1,43 @@
 export type ItemType = "app" | "command";
 
-// "single" (default, omitted from saved config) means the workspace has one
-// project folder (`cwd`). "split" means it has separate frontend/backend
-// folders (`frontendCwd`/`backendCwd`), and each item picks one via `side`.
-export type WorkspaceLayout = "single" | "split";
-export type ItemSide = "frontend" | "backend";
+// A workspace has one implicit project folder by default (`Workspace.cwd`).
+// Setting `folders` (2 or more named entries) splits it into that many
+// named project folders instead — e.g. frontend/backend, or frontend/
+// backend-1/backend-2 — and each item picks one via `folderIndex` (an index
+// into `folders`). `folders` with 0 or 1 entries is never saved; "how many
+// folders" is entirely derived from its length, there's no separate
+// enum/flag for it (see the removed `WorkspaceLayout`/"split" concept this
+// replaces — AGENTS.md's "Configurable folder count" note has the history).
+export interface WorkspaceFolder {
+  name: string;
+  cwd?: string;
+}
 
 export interface WorkspaceItem {
   name: string;
   type: ItemType;
   /** Shell command used to launch this item. */
   launch: string;
-  /** Working directory for launch/close commands. Falls back to the workspace's cwd. */
+  /** Working directory for launch/close commands. Falls back to the workspace's cwd (or its assigned folder's cwd, if `folderIndex` is set). */
   cwd?: string;
-  /** Which project folder this item runs in, when the workspace layout is "split". */
-  side?: ItemSide;
+  /** Which of the workspace's `folders` this item runs in by default (index into that array), when the workspace has more than one. */
+  folderIndex?: number;
   /** Optional shell command run instead of killing the process when closing. */
   close?: string;
   /** Optional pause (ms) after launching before starting the next item. */
   delayMs?: number;
+  /** Optional free-form label (e.g. "container", "editor") for opening/closing a subset of a workspace's items together — see `wsm open <name> <tag>`/`wsm close <name> <tag>`. */
+  tag?: string;
 }
 
 export const UNGROUPED = "Ungrouped";
 
 export interface Workspace {
   name: string;
-  /** Default working directory for items that don't specify their own. Used when layout is "single" (the default). */
+  /** Default working directory for items that don't specify their own. Used when `folders` has fewer than 2 entries (the default). */
   cwd?: string;
-  /** "single" (default, one project folder) or "split" (separate frontend/backend folders). */
-  layout?: WorkspaceLayout;
-  /** Frontend project folder, used when layout is "split". */
-  frontendCwd?: string;
-  /** Backend project folder, used when layout is "split". */
-  backendCwd?: string;
+  /** Named project folders items can be split across — omitted (or fewer than 2 entries) means just one folder, `cwd`. */
+  folders?: WorkspaceFolder[];
   /** Optional group name for TUI organization, e.g. "Work", "Personal". */
   group?: string;
   items: WorkspaceItem[];
@@ -47,6 +52,8 @@ export interface Settings {
   autocomplete?: boolean;
   /** Whether the TUI has already asked once whether to set up shell integration (tab-completion + custom commands), so it only ever asks once. Default: false. */
   shellIntegrationPrompted?: boolean;
+  /** How many project folders a workspace's "Folders" field allows splitting into. Default: 6. Above 6 is accepted but flagged "experimental" in the Settings tab — the items pane's per-folder columns get narrower with each one and haven't been verified to render well past that. */
+  maxWorkspaceFolders?: number;
 }
 
 /** A user-defined shell function, e.g. `logs` -> `docker compose logs -f`, made available in the shell (not scoped to any workspace) via `wsm commands` — see AGENTS.md. */

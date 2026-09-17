@@ -224,6 +224,56 @@ describe("App (TUI)", () => {
     expect(items.map((i: any) => i.name)).toEqual(["fe-editor", "fe-dev"]);
   });
 
+  test("an item's tag shows inline in the items pane and round-trips through the edit form", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: epg
+    cwd: /tmp/epg
+    items:
+      - name: Mongo
+        type: command
+        launch: docker run -d mongo
+        close: docker stop mongo
+        tag: container
+`,
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write(ENTER); // enter the (only) group
+    await flush();
+    stdin.write(ENTER); // open epg's items
+    await flush();
+
+    // Shown inline next to the item, not just on the edit form.
+    expect(lastFrame()).toContain("Mongo [command] #container");
+
+    stdin.write(ENTER); // edit Mongo
+    await flush();
+    expect(lastFrame()).toContain("container"); // Tag field prefilled
+
+    // Change the tag and save: Name -> Type -> Launch -> Directory ->
+    // Close via -> Close cmd -> Delay (ms) -> Tag (last field).
+    for (let i = 0; i < 7; i++) {
+      stdin.write(ENTER);
+      await flush();
+    }
+    stdin.write("\x7f".repeat(9)); // clear "container"
+    await flush();
+    stdin.write("db");
+    await flush();
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.workspaces[0].items[0].tag).toBe("db");
+  });
+
   test("left arrow from the frontend column exits back to the workspace list", async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     fs.writeFileSync(
@@ -255,6 +305,177 @@ describe("App (TUI)", () => {
     expect(lastFrame()).toMatch(/›\s*split-app/);
 
     unmount();
+  });
+
+  test("creates a workspace with more than two folders via the Folders count field", async () => {
+    const { stdin, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("a");
+    await flush(); // group field
+    stdin.write(ENTER);
+    await flush(); // -> name field
+    stdin.write("multi-app");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folders field, prefilled "1"
+    stdin.write("\x7f"); // clear "1"
+    await flush();
+    stdin.write("3");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folder 1 name, prefilled "Frontend"
+    stdin.write(ENTER); // keep "Frontend" -> Folder 1 dir
+    await flush();
+    stdin.write("/tmp/fe");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folder 2 name, prefilled "Backend"
+    stdin.write(ENTER); // keep "Backend" -> Folder 2 dir
+    await flush();
+    stdin.write("/tmp/be");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folder 3 name, blank (no default past 2)
+    stdin.write("Backend 2");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folder 3 dir
+    stdin.write("/tmp/be2");
+    await flush();
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.workspaces[0]).toMatchObject({
+      name: "multi-app",
+      folders: [
+        { name: "Frontend", cwd: "/tmp/fe" },
+        { name: "Backend", cwd: "/tmp/be" },
+        { name: "Backend 2", cwd: "/tmp/be2" },
+      ],
+    });
+    expect(config.workspaces[0].cwd).toBeUndefined();
+  });
+
+  test("WorkspaceForm rejects a non-numeric Folders value", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("a");
+    await flush();
+    stdin.write(ENTER); // group blank -> name
+    await flush();
+    stdin.write("bad-count");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folders field, prefilled "1"
+    stdin.write("\x7f"); // clear "1"
+    await flush();
+    stdin.write("abc");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // folderCount parses to 1 for display -> Directory field
+    stdin.write(ENTER); // last field -> submit, raw "abc" fails validation
+    await flush();
+
+    expect(lastFrame()).toContain("Folders must be a positive number");
+
+    unmount();
+  });
+
+  test("adding an item from a specific folder column assigns it that folder", async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: multi-app
+    folders:
+      - name: Frontend
+        cwd: /tmp/fe
+      - name: Backend 1
+        cwd: /tmp/be1
+      - name: Backend 2
+        cwd: /tmp/be2
+    items: []
+`,
+    );
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write(ENTER); // enter the (only) group
+    await flush();
+    stdin.write(ENTER); // open multi-app's items
+    await flush();
+
+    expect(lastFrame()).toContain("Frontend");
+    expect(lastFrame()).toContain("Backend 1");
+    expect(lastFrame()).toContain("Backend 2");
+
+    stdin.write(RIGHT); // Frontend -> Backend 1
+    await flush();
+    stdin.write(RIGHT); // Backend 1 -> Backend 2
+    await flush();
+
+    stdin.write("a"); // add item in the Backend 2 column
+    await flush();
+    stdin.write("worker");
+    await flush();
+    stdin.write(ENTER); // -> Type, keep "App"
+    await flush();
+    stdin.write(ENTER); // -> Launch
+    await flush();
+    stdin.write("some-command");
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Folder select, preset to "Backend 2"
+    expect(lastFrame()).toContain("Backend 2");
+    stdin.write(ENTER); // keep it -> Directory
+    await flush();
+    stdin.write(ENTER); // blank -> Close via
+    await flush();
+    stdin.write(ENTER); // keep "Kill process" -> Delay (ms)
+    await flush();
+    stdin.write(ENTER); // blank -> Tag
+    await flush();
+    stdin.write(ENTER); // last field -> submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.workspaces[0].items[0]).toMatchObject({ name: "worker", folderIndex: 2 });
+  });
+
+  test("raising Max folders above 6 shows an experimental hint and persists the new cap", async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    await flush();
+
+    stdin.write("3");
+    await flush();
+    stdin.write(ENTER); // -> Dead sessions
+    await flush();
+    stdin.write(ENTER);
+    await flush(); // -> Max folders field, prefilled "6"
+    stdin.write("\x7f"); // clear "6"
+    await flush();
+    stdin.write("8");
+    await flush();
+
+    expect(lastFrame()).toContain("experimental");
+
+    stdin.write(ENTER); // -> Theme
+    await flush();
+    stdin.write(ENTER); // submit
+    await flush();
+
+    unmount();
+
+    const config = readConfigYaml(tmpDir);
+    expect(config.settings.maxWorkspaceFolders).toBe(8);
   });
 
   test("shows a green open indicator for a workspace tracked as an open session", async () => {
@@ -386,7 +607,9 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(RIGHT); // "Flag only" -> "Auto-remove from state.json"
     await flush();
-    stdin.write(ENTER); // -> Theme field
+    stdin.write(ENTER); // -> Max folders field
+    await flush();
+    stdin.write(ENTER); // -> Theme field, prefilled "6" -> keep it
     await flush();
     stdin.write(ENTER); // last field, left as "Default" -> submit
     await flush();
@@ -399,6 +622,7 @@ describe("App (TUI)", () => {
       autoPruneStaleSessions: true,
       autocomplete: false,
       shellIntegrationPrompted: false,
+      maxWorkspaceFolders: 6,
     });
   });
 
@@ -410,7 +634,9 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(ENTER); // -> Dead sessions field
     await flush();
-    stdin.write(ENTER); // -> Theme field
+    stdin.write(ENTER); // -> Max folders field
+    await flush();
+    stdin.write(ENTER); // -> Theme field, prefilled "6" -> keep it
     await flush();
     expect(lastFrame()).toContain("Default");
 
@@ -435,7 +661,9 @@ describe("App (TUI)", () => {
     await flush();
     stdin.write(ENTER); // -> Dead sessions field
     await flush();
-    stdin.write(ENTER); // -> Theme field
+    stdin.write(ENTER); // -> Max folders field
+    await flush();
+    stdin.write(ENTER); // -> Theme field, prefilled "6" -> keep it
     await flush();
     stdin.write(RIGHT); // Default -> Catppuccin Mocha, unsaved
     await flush();
@@ -873,7 +1101,9 @@ describe("Shell integration setup", () => {
     stdin.write(RIGHT); // Off -> On
     await flush();
     stdin.write(ENTER);
-    await flush(); // -> Theme field
+    await flush(); // -> Max folders field
+    stdin.write(ENTER);
+    await flush(); // -> Theme field, prefilled "6" -> keep it
     stdin.write(ENTER);
     await flush(); // last field -> submit
 
@@ -913,7 +1143,9 @@ describe("Shell integration setup", () => {
     stdin.write(LEFT); // On -> Off
     await flush();
     stdin.write(ENTER);
-    await flush(); // -> Theme
+    await flush(); // -> Max folders field
+    stdin.write(ENTER);
+    await flush(); // -> Theme, prefilled "6" -> keep it
     stdin.write(ENTER);
     await flush(); // submit
 
@@ -946,6 +1178,7 @@ describe("SettingsForm (Theme live preview)", () => {
           autoPruneStaleSessions: false,
           autocomplete: false,
           shellIntegrationPrompted: false,
+          maxWorkspaceFolders: 6,
         }}
         themeNames={["Default", "Catppuccin Mocha", "Dracula"]}
         activeTheme="Default"
@@ -958,7 +1191,9 @@ describe("SettingsForm (Theme live preview)", () => {
 
     stdin.write(ENTER); // -> Dead sessions field
     await flush();
-    stdin.write(ENTER); // -> Theme field
+    stdin.write(ENTER); // -> Max folders field
+    await flush();
+    stdin.write(ENTER); // -> Theme field, prefilled "6" -> keep it
     await flush();
     expect(onPreviewTheme).not.toHaveBeenCalled();
 

@@ -92,18 +92,19 @@ describe("launcher", () => {
     expect(options.stdio[0]).toBe("ignore");
   });
 
-  test("resolves cwd with priority: item.cwd > split side dir > workspace cwd", async () => {
+  test("resolves cwd with priority: item.cwd > assigned folder dir > workspace cwd", async () => {
     seedConfig({
       workspaces: [
         {
           name: "split-app",
-          layout: "split",
-          frontendCwd: "/tmp/fe",
-          backendCwd: "/tmp/be",
+          folders: [
+            { name: "Frontend", cwd: "/tmp/fe" },
+            { name: "Backend", cwd: "/tmp/be" },
+          ],
           items: [
-            { name: "fe-item", type: "command", launch: "npm run dev", side: "frontend" },
-            { name: "be-item", type: "command", launch: "task runserver", side: "backend" },
-            { name: "override", type: "command", launch: "echo hi", side: "backend", cwd: "/tmp/explicit" },
+            { name: "fe-item", type: "command", launch: "npm run dev", folderIndex: 0 },
+            { name: "be-item", type: "command", launch: "task runserver", folderIndex: 1 },
+            { name: "override", type: "command", launch: "echo hi", folderIndex: 1, cwd: "/tmp/explicit" },
           ],
         },
       ],
@@ -113,6 +114,31 @@ describe("launcher", () => {
 
     const cwds = spawnMock.mock.calls.map((call: any) => call[2].cwd);
     expect(cwds).toEqual(["/tmp/fe", "/tmp/be", "/tmp/explicit"]);
+  });
+
+  test("resolves cwd across more than two folders", async () => {
+    seedConfig({
+      workspaces: [
+        {
+          name: "multi-app",
+          folders: [
+            { name: "Frontend", cwd: "/tmp/fe" },
+            { name: "Backend 1", cwd: "/tmp/be1" },
+            { name: "Backend 2", cwd: "/tmp/be2" },
+          ],
+          items: [
+            { name: "fe", type: "command", launch: "npm run dev", folderIndex: 0 },
+            { name: "be1", type: "command", launch: "task runserver", folderIndex: 1 },
+            { name: "be2", type: "command", launch: "task runserver", folderIndex: 2 },
+          ],
+        },
+      ],
+    });
+
+    await launcher.openWorkspace("multi-app", {});
+
+    const cwds = spawnMock.mock.calls.map((call: any) => call[2].cwd);
+    expect(cwds).toEqual(["/tmp/fe", "/tmp/be1", "/tmp/be2"]);
   });
 
   test("openWorkspace throws a clear error for an unknown workspace name", async () => {
@@ -429,6 +455,101 @@ describe("launcher", () => {
 
     const remaining = stateModule.loadState().sessions.map((s) => s.workspace);
     expect(remaining).toEqual(["a"]);
+  });
+
+  describe("tagged open/close (a subset of a workspace's items, e.g. just its containers)", () => {
+    function seedTaggedWorkspace() {
+      seedConfig({
+        workspaces: [
+          {
+            name: "demo",
+            items: [
+              { name: "editor", type: "app", launch: "code ." },
+              { name: "mongo", type: "command", launch: "docker run -d mongo", tag: "container" },
+              { name: "redis", type: "command", launch: "docker run -d redis", tag: "container" },
+            ],
+          },
+        ],
+      });
+    }
+
+    test("closeTaggedItems closes only the tagged items, leaving the rest of the session open", async () => {
+      seedTaggedWorkspace();
+      await launcher.openWorkspace("demo", {});
+      const before = stateModule.loadState();
+      const editorPid = before.sessions[0]!.items[0]!.pid!;
+      const mongoPid = before.sessions[0]!.items[1]!.pid!;
+      const redisPid = before.sessions[0]!.items[2]!.pid!;
+
+      launcher.closeTaggedItems("demo", "container");
+
+      expect(killSpy).toHaveBeenCalledWith(-mongoPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(-redisPid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-editorPid, "SIGTERM");
+      const state = stateModule.loadState();
+      expect(state.sessions).toHaveLength(1);
+      expect(state.sessions[0]!.items.map((i) => i.name)).toEqual(["editor"]);
+    });
+
+    test("closeTaggedItems drops the session entirely once its last item is closed", async () => {
+      seedConfig({
+        workspaces: [
+          { name: "demo", items: [{ name: "mongo", type: "command", launch: "docker run -d mongo", tag: "container" }] },
+        ],
+      });
+      await launcher.openWorkspace("demo", {});
+
+      launcher.closeTaggedItems("demo", "container");
+
+      expect(stateModule.loadState().sessions).toEqual([]);
+    });
+
+    test("openTaggedItems relaunches just the tagged items and merges them back into the existing session, leaving the others untouched", async () => {
+      seedTaggedWorkspace();
+      await launcher.openWorkspace("demo", {});
+      const before = stateModule.loadState();
+      const editorPid = before.sessions[0]!.items[0]!.pid!;
+      const oldMongoPid = before.sessions[0]!.items[1]!.pid!;
+      launcher.closeTaggedItems("demo", "container");
+
+      await launcher.openTaggedItems("demo", "container");
+
+      const state = stateModule.loadState();
+      expect(state.sessions).toHaveLength(1);
+      const items = state.sessions[0]!.items;
+      expect(items.map((i) => i.name).sort()).toEqual(["editor", "mongo", "redis"]);
+      expect(items.find((i) => i.name === "editor")!.pid).toBe(editorPid); // untouched
+      expect(items.find((i) => i.name === "mongo")!.pid).not.toBe(oldMongoPid); // relaunched, new pid
+    });
+
+    test("openTaggedItems creates a new session when the workspace isn't open at all yet", async () => {
+      seedTaggedWorkspace();
+
+      await launcher.openTaggedItems("demo", "container");
+
+      const state = stateModule.loadState();
+      expect(state.sessions).toHaveLength(1);
+      expect(state.sessions[0]!.workspace).toBe("demo");
+      expect(state.sessions[0]!.items.map((i) => i.name)).toEqual(["mongo", "redis"]);
+    });
+
+    test("openTaggedItems/closeTaggedItems reject an unknown workspace", async () => {
+      seedConfig({ workspaces: [] });
+      await expect(launcher.openTaggedItems("nope", "container")).rejects.toThrow(/No workspace named "nope"/);
+      expect(() => launcher.closeTaggedItems("nope", "container")).toThrow(/No workspace named "nope"/);
+    });
+
+    test("openTaggedItems/closeTaggedItems reject a tag with no matching items, to catch typos", async () => {
+      seedTaggedWorkspace();
+      await expect(launcher.openTaggedItems("demo", "nope")).rejects.toThrow(/No items tagged "nope"/);
+      expect(() => launcher.closeTaggedItems("demo", "nope")).toThrow(/No items tagged "nope"/);
+    });
+
+    test("closeTaggedItems is a harmless no-op when the workspace isn't currently open", () => {
+      seedTaggedWorkspace();
+      expect(() => launcher.closeTaggedItems("demo", "container")).not.toThrow();
+      expect(stateModule.loadState().sessions).toEqual([]);
+    });
   });
 
   describe("per-item log capture", () => {

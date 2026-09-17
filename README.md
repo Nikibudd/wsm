@@ -67,6 +67,8 @@ wsm open <name>         # closes whatever's open, then opens <name>
 wsm open <name> --no-close   # opens <name> without closing anything else
 wsm close [name]        # closes the current (or named) open workspace
 wsm close --all         # closes every currently open workspace
+wsm open <name> <tag>   # (re)opens just that workspace's items sharing <tag>
+wsm close <name> <tag>  # closes just that workspace's items sharing <tag>, leaving the rest open
 wsm list                # lists configured workspaces
 wsm status              # shows what's currently open
 wsm update              # downloads and installs the latest release, in place
@@ -169,31 +171,42 @@ dashboard with three levels of drill-down: **Groups → Workspaces → Items**.
   - Terminate the launched process directly — default for plain background
     commands
   - Leave it running (skip auto-close)
+- Optionally give an item a free-form **Tag** (e.g. `container`) to open/close
+  it together with other same-tagged items via `wsm open/close <name> <tag>`,
+  without touching the rest of the workspace — see "Opening/closing a subset
+  of a workspace" below.
 
 Forms are keyboard-driven: `↑↓` between fields, `←→` to change a dropdown
 value, `enter` to move to the next field (or save on the last one), `esc` to
 cancel.
 
-### Single project folder vs. split frontend/backend
+### Single project folder vs. multiple
 
 By default a workspace has one project folder (`cwd`) that all its items
 launch in unless they set their own `Directory`. The workspace form's
-**Layout** field can be switched to "Split frontend/backend" instead, which
-replaces the single directory with a **Frontend dir** and **Backend dir** —
-each item then gets a **Side** field (Frontend/Backend) that picks which
-folder it runs in by default (still overridable per item via `Directory`).
-This only shows up once you opt in; single-folder stays the default for new
-and existing workspaces. When split, the items pane renders as two side-by-side
-columns (Frontend | Backend) instead of one list — `←→` switches between them
-(or exits back to the workspace list from the frontend column), `↑↓` moves
-within the focused column, and `a` adds an item to whichever column has focus.
+**Folders** field (default `1`) can be raised to split a workspace across
+that many named project folders instead — `2` for a frontend+backend split,
+`3` for frontend + two backend services, and so on (up to a configurable
+cap — 6 by default, see the Settings tab below). Raising it reveals a
+**Folder N name**/**Folder N dir** pair per folder (the first two default to
+"Frontend"/"Backend", continuing what used to be the only split this form
+offered; anything past that starts blank) — each item then gets a **Folder**
+field that picks which one it runs in by default (still overridable per item
+via `Directory`). This only shows up once you raise the count past 1;
+single-folder stays the default for new and existing workspaces. When split,
+the items pane renders one column per folder instead of a single list —
+`←→` switches between them (or exits back to the workspace list from the
+first column), `↑↓` moves within the focused column, and `a` adds an item to
+whichever column has focus.
 
 ```yaml
 workspaces:
   - name: acme-app
-    layout: split
-    frontendCwd: ~/dev/acme-web
-    backendCwd: ~/dev/acme-api
+    folders:
+      - name: Frontend
+        cwd: ~/dev/acme-web
+      - name: Backend
+        cwd: ~/dev/acme-api
     items:
       - name: editor
         type: app
@@ -202,12 +215,22 @@ workspaces:
       - name: frontend dev server
         type: command
         launch: npm run dev
-        side: frontend
+        folderIndex: 0
       - name: backend dev server
         type: command
         launch: task runserver
-        side: backend
+        folderIndex: 1
 ```
+
+The Settings tab (press `3`) has a **Max folders** field (default `6`)
+raising the cap the Folders field above accepts — values past 6 are accepted
+but flagged experimental, since the items pane hasn't been verified to
+render well with that many side-by-side columns.
+
+Configs written before this generalization (a fixed two-way
+`layout: split`/`frontendCwd`/`backendCwd`/item `side: frontend`|`backend`)
+still load correctly — they're transparently upgraded to the `folders`/
+`folderIndex` shape above the moment they're read, no hand-editing needed.
 
 Config lives at `~/.config/workspace-manager/config.yaml` and can be hand
 edited too. Example:
@@ -229,11 +252,29 @@ workspaces:
         type: command
         launch: docker compose up -d
         close: docker compose down
+        tag: container
       - name: mongo-compass
         type: app
         launch: open -a "MongoDB Compass" "mongodb://localhost:27017"
         close: osascript -e 'tell application "MongoDB Compass" to quit'
 ```
+
+### Opening/closing a subset of a workspace
+
+Give any item(s) a free-form **Tag** (config: `tag`, e.g. `container`) to
+open or close just those items, without touching the rest of the workspace:
+
+```bash
+wsm close acme-api container   # stop just the tagged item(s), e.g. before running tests
+wsm open acme-api container    # bring them back up afterward
+```
+
+This is scoped to the *already-open* workspace's session — it doesn't close
+or reopen anything else in `acme-api`, and it doesn't apply the
+`defaultClose`/`--no-close` logic a plain `wsm open <name>` does. A common
+use: tag the containers a service's tests spin up their own copies of, so
+you can free their ports for the test run and restart them afterward
+without restarting your editor/terminal too.
 
 `close` is just a shell command — `osascript ...` above is one example (macOS
 AppleScript), not something wsm has special support for. See Notes below for

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { openWorkspace, closeWorkspaces, statusReport, statusJson, pruneDeadSessions } from "./launcher.js";
+import {
+  openWorkspace,
+  closeWorkspaces,
+  openTaggedItems,
+  closeTaggedItems,
+  statusReport,
+  statusJson,
+  pruneDeadSessions,
+} from "./launcher.js";
 import { loadConfig, workspaceNames, getSettings, getCustomCommands } from "./config.js";
 import { loadState, saveState } from "./state.js";
 import { runTui } from "./tui/index.js";
@@ -23,18 +31,21 @@ program
   .version(pkg.version);
 
 program
-  .command("open <name>")
+  .command("open <name> [tag]")
   .description(
-    "Open a configured workspace (closes any currently open workspace first, unless configured otherwise)",
+    "Open a configured workspace (closes any currently open workspace first, unless configured otherwise). " +
+      "With [tag], only (re)opens that workspace's items sharing that tag, merged into its currently open " +
+      "session instead of touching anything else — e.g. `wsm open epg container` to restart just its containers.",
   )
   .option("--close", "close the currently open workspace(s) first, overriding the configured default")
   .option(
     "--no-close",
     "keep the currently open workspace(s) running instead of closing them, overriding the configured default",
   )
-  .action(async (name: string, options: { close?: boolean }) => {
+  .action(async (name: string, tag: string | undefined, options: { close?: boolean }) => {
     try {
-      await openWorkspace(name, { close: options.close });
+      if (tag) await openTaggedItems(name, tag);
+      else await openWorkspace(name, { close: options.close });
     } catch (err) {
       console.error((err as Error).message);
       process.exitCode = 1;
@@ -42,10 +53,27 @@ program
   });
 
 program
-  .command("close [name]")
-  .description("Close the current open workspace, or a specific one by name")
+  .command("close [name] [tag]")
+  .description(
+    "Close the current open workspace, or a specific one by name. With [tag] (requires a name), only " +
+      "closes that workspace's currently open items sharing that tag, leaving the rest open.",
+  )
   .option("--all", "close every currently open workspace")
-  .action(async (name: string | undefined, options: { all?: boolean }) => {
+  .action(async (name: string | undefined, tag: string | undefined, options: { all?: boolean }) => {
+    if (tag) {
+      if (!name) {
+        console.error('A tag requires a workspace name too, e.g. "wsm close epg container".');
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        closeTaggedItems(name, tag);
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exitCode = 1;
+      }
+      return;
+    }
     await closeWorkspaces({ name, all: options.all });
   });
 
