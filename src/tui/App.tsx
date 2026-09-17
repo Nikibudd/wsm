@@ -16,7 +16,7 @@ import type { CompletionShell } from "../shellIntegration.js";
 import { loadState } from "../state.js";
 import { getActiveTheme, loadThemes, saveThemes } from "../theme.js";
 import type { ThemeColors, ThemesFile } from "../theme.js";
-import type { Config, CustomCommand, ItemSide, Workspace, WorkspaceItem } from "../types.js";
+import type { Config, CustomCommand, Workspace, WorkspaceItem } from "../types.js";
 import { UNGROUPED } from "../types.js";
 import { CustomCommandForm, ItemForm, RenameGroupForm, SettingsForm, WorkspaceForm } from "./Form.js";
 import { ConfirmDialog, ShellIntegrationPrompt } from "./ConfirmDialog.js";
@@ -38,7 +38,7 @@ type Overlay =
   | { kind: "addWorkspace"; presetGroup?: string }
   | { kind: "editWorkspace"; workspaceName: string }
   | { kind: "duplicateWorkspace"; workspaceName: string }
-  | { kind: "itemForm"; workspaceName: string; itemIndex: number | null; presetSide?: ItemSide }
+  | { kind: "itemForm"; workspaceName: string; itemIndex: number | null; presetFolderIndex?: number }
   | { kind: "confirmDeleteWorkspace"; workspaceName: string }
   | { kind: "confirmDeleteItem"; workspaceName: string; itemIndex: number }
   | { kind: "renameGroup"; groupName: string }
@@ -341,13 +341,38 @@ function SideColumn({
   );
 }
 
-function splitEntries(workspace: Workspace): { frontend: ItemEntry[]; backend: ItemEntry[] } {
-  const frontend: ItemEntry[] = [];
-  const backend: ItemEntry[] = [];
+// One bucket per folder, items sorted into whichever their `folderIndex`
+// names — clamped defensively (e.g. a hand-edited config.yaml with an
+// out-of-range index, or a workspace just edited down to fewer folders
+// than some item still references) rather than dropping/crashing on it.
+function groupItemsByFolder(workspace: Workspace): ItemEntry[][] {
+  const folderCount = workspace.folders?.length ?? 0;
+  const buckets: ItemEntry[][] = Array.from({ length: Math.max(folderCount, 1) }, () => []);
   workspace.items.forEach((item, originalIndex) => {
-    (item.side === "backend" ? backend : frontend).push({ item, originalIndex });
+    const idx = Math.min(Math.max(item.folderIndex ?? 0, 0), buckets.length - 1);
+    buckets[idx]!.push({ item, originalIndex });
   });
-  return { frontend, backend };
+  return buckets;
+}
+
+// Applied whenever a workspace's folders are (re)saved from WorkspaceForm —
+// folders are referenced by index (see types.ts), so renaming one is free,
+// but shrinking the folder count can leave items pointing past the new
+// array's end. Clamps those back to the last valid folder rather than
+// leaving a dangling index (groupItemsByFolder already clamps defensively
+// too, but doing it here keeps what's actually saved to config.yaml clean,
+// not just what's rendered). Drops `folderIndex` entirely once a workspace
+// is back down to a single folder — `folders` itself is never saved at
+// length <= 1 either, so there'd be nothing left for it to reference.
+function clampItemFolders(items: WorkspaceItem[], folderCount: number): WorkspaceItem[] {
+  if (folderCount <= 1) {
+    return items.map(({ folderIndex: _folderIndex, ...rest }) => rest);
+  }
+  return items.map((item) =>
+    item.folderIndex !== undefined && item.folderIndex >= folderCount
+      ? { ...item, folderIndex: folderCount - 1 }
+      : item,
+  );
 }
 
 function ItemPane({
@@ -359,7 +384,7 @@ function ItemPane({
 }: {
   workspace: Workspace | undefined;
   selectedIndex: number;
-  itemColumn: ItemSide;
+  itemColumn: number;
   active: boolean;
   height: number;
 }) {
@@ -382,7 +407,8 @@ function ItemPane({
     );
   }
 
-  const isSplit = workspace.layout === "split";
+  const folders = workspace.folders ?? [];
+  const isSplit = folders.length > 1;
 
   return (
     <Box
@@ -403,24 +429,21 @@ function ItemPane({
       <Box height={1} />
       {isSplit ? (
         (() => {
-          const { frontend, backend } = splitEntries(workspace);
+          const buckets = groupItemsByFolder(workspace);
           return (
             <Box flexDirection="row" flexGrow={1}>
-              <SideColumn
-                title="Frontend"
-                cwd={workspace.frontendCwd}
-                entries={frontend}
-                active={active && itemColumn === "frontend"}
-                selectedIndex={selectedIndex}
-              />
-              <Box width={2} />
-              <SideColumn
-                title="Backend"
-                cwd={workspace.backendCwd}
-                entries={backend}
-                active={active && itemColumn === "backend"}
-                selectedIndex={selectedIndex}
-              />
+              {folders.map((folder, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 ? <Box width={2} /> : null}
+                  <SideColumn
+                    title={folder.name}
+                    cwd={folder.cwd}
+                    entries={buckets[i] ?? []}
+                    active={active && itemColumn === i}
+                    selectedIndex={selectedIndex}
+                  />
+                </React.Fragment>
+              ))}
             </Box>
           );
         })()
@@ -676,7 +699,7 @@ export function App() {
   const [groupIndex, setGroupIndex] = useState(0);
   const [wsIndex, setWsIndex] = useState(0);
   const [itemIndex, setItemIndex] = useState(0);
-  const [itemColumn, setItemColumn] = useState<ItemSide>("frontend");
+  const [itemColumn, setItemColumn] = useState(0);
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   // Unsaved theme selection from the Settings overlay's Theme field, applied
@@ -730,12 +753,13 @@ export function App() {
   const currentGroup = groups[groupIndex];
   const currentGroupWorkspaces = currentGroup?.workspaces ?? [];
   const currentWorkspace = currentGroupWorkspaces[wsIndex];
-  const isSplit = currentWorkspace?.layout === "split";
-  const { frontend: frontendEntries, backend: backendEntries } = useMemo(
-    () => (currentWorkspace ? splitEntries(currentWorkspace) : { frontend: [], backend: [] }),
+  const currentFolders = currentWorkspace?.folders ?? [];
+  const isSplit = currentFolders.length > 1;
+  const itemBuckets = useMemo(
+    () => (currentWorkspace ? groupItemsByFolder(currentWorkspace) : []),
     [currentWorkspace],
   );
-  const activeColumnEntries = itemColumn === "frontend" ? frontendEntries : backendEntries;
+  const activeColumnEntries = itemBuckets[itemColumn] ?? [];
 
   // Resolve a pending "select this by name" request once the derived group
   // list reflects a just-made change (add/rename/move workspace or group).
@@ -772,8 +796,14 @@ export function App() {
   }, [currentGroup?.name, currentGroupWorkspaces.length]);
 
   useEffect(() => {
-    setItemColumn("frontend");
+    setItemColumn(0);
   }, [currentWorkspace?.name]);
+
+  // Clamp if the workspace was just edited down to fewer folders while its
+  // items pane was focused on one that no longer exists.
+  useEffect(() => {
+    setItemColumn((c) => Math.min(c, Math.max(0, currentFolders.length - 1)));
+  }, [currentFolders.length]);
 
   useEffect(() => {
     if (!currentWorkspace) {
@@ -896,15 +926,15 @@ export function App() {
         if (key.escape) {
           setPane("workspaces");
         } else if (key.leftArrow) {
-          if (itemColumn === "backend") {
-            setItemColumn("frontend");
+          if (itemColumn > 0) {
+            setItemColumn((c) => c - 1);
             setItemIndex(0);
           } else {
             setPane("workspaces");
           }
         } else if (key.rightArrow) {
-          if (itemColumn === "frontend") {
-            setItemColumn("backend");
+          if (itemColumn < currentFolders.length - 1) {
+            setItemColumn((c) => c + 1);
             setItemIndex(0);
           }
         } else if (key.downArrow) {
@@ -917,7 +947,7 @@ export function App() {
               kind: "itemForm",
               workspaceName: currentWorkspace.name,
               itemIndex: null,
-              presetSide: itemColumn,
+              presetFolderIndex: itemColumn,
             });
           } else {
             setOverlay({
@@ -972,7 +1002,7 @@ export function App() {
       return "↑↓ select · enter/→ open · a add workspace · r rename/move · c duplicate · d delete · ←/esc back · ● = open · 1/2/3 tabs · q quit";
     }
     if (isSplit) {
-      return "↑↓ select · ←→ frontend/backend · enter edit · a add item · c workspace settings · d delete · esc back · 1/2/3 tabs · q quit";
+      return "↑↓ select · ←→ switch folder · enter edit · a add item · c workspace settings · d delete · esc back · 1/2/3 tabs · q quit";
     }
     return "↑↓ select · enter edit · a add item · c workspace settings · d delete · ←/esc back · 1/2/3 tabs · q quit";
   }, [pane, isSplit]);
@@ -984,14 +1014,13 @@ export function App() {
         <WorkspaceForm
           existingNames={config.workspaces.map((w) => w.name)}
           presetGroup={overlay.presetGroup}
-          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+          maxFolders={getSettings(config).maxWorkspaceFolders}
+          onSubmit={({ name, cwd, group, folders }) => {
             const workspace: Workspace = {
               name,
               group: group || undefined,
-              layout: layout === "split" ? "split" : undefined,
-              cwd: layout === "single" ? cwd || undefined : undefined,
-              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
-              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
+              cwd: folders.length === 0 ? cwd || undefined : undefined,
+              folders: folders.length > 0 ? folders : undefined,
               items: [],
             };
             setConfig((prev) => ({
@@ -1011,15 +1040,15 @@ export function App() {
         <WorkspaceForm
           existing={workspace}
           existingNames={config.workspaces.map((w) => w.name)}
-          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+          maxFolders={getSettings(config).maxWorkspaceFolders}
+          onSubmit={({ name, cwd, group, folders }) => {
             mutateWorkspace(overlay.workspaceName, (w) => ({
               ...w,
               name,
               group: group || undefined,
-              layout: layout === "split" ? "split" : undefined,
-              cwd: layout === "single" ? cwd || undefined : undefined,
-              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
-              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
+              cwd: folders.length === 0 ? cwd || undefined : undefined,
+              folders: folders.length > 0 ? folders : undefined,
+              items: clampItemFolders(w.items, folders.length),
             }));
             pendingSelect.current = { type: "workspace", name };
             setOverlay(null);
@@ -1036,22 +1065,22 @@ export function App() {
           initialValues={{
             name: `${source.name}-copy`,
             group: source.group ?? "",
-            layout: source.layout ?? "single",
             cwd: source.cwd ?? "",
-            frontendCwd: source.frontendCwd ?? "",
-            backendCwd: source.backendCwd ?? "",
+            folders: source.folders ?? [],
           }}
           title={`Duplicate workspace · ${source.name}`}
           submitLabel="duplicate"
-          onSubmit={({ name, cwd, group, layout, frontendCwd, backendCwd }) => {
+          maxFolders={getSettings(config).maxWorkspaceFolders}
+          onSubmit={({ name, cwd, group, folders }) => {
             const workspace: Workspace = {
               name,
               group: group || undefined,
-              layout: layout === "split" ? "split" : undefined,
-              cwd: layout === "single" ? cwd || undefined : undefined,
-              frontendCwd: layout === "split" ? frontendCwd || undefined : undefined,
-              backendCwd: layout === "split" ? backendCwd || undefined : undefined,
-              items: source.items.map((item) => ({ ...item })),
+              cwd: folders.length === 0 ? cwd || undefined : undefined,
+              folders: folders.length > 0 ? folders : undefined,
+              items: clampItemFolders(
+                source.items.map((item) => ({ ...item })),
+                folders.length,
+              ),
             };
             setConfig((prev) => ({
               ...prev,
@@ -1071,8 +1100,8 @@ export function App() {
       overlayNode = workspace ? (
         <ItemForm
           existing={existing}
-          isSplit={workspace.layout === "split"}
-          presetSide={overlay.presetSide}
+          folders={workspace.folders ?? []}
+          presetFolderIndex={overlay.presetFolderIndex}
           onSubmit={(item) => {
             mutateWorkspace(overlay.workspaceName, (w) => {
               const items = [...w.items];

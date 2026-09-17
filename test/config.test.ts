@@ -43,23 +43,24 @@ describe("config", () => {
     expect(loadConfig()).toEqual({ workspaces: [] });
   });
 
-  test("saveConfig then loadConfig round-trips a full workspace, including group/layout/side", () => {
+  test("saveConfig then loadConfig round-trips a full workspace, including group/folders/folderIndex", () => {
     const original: Config = {
       workspaces: [
         {
           name: "acme-app",
           group: "Work",
-          layout: "split",
-          frontendCwd: "/dev/acme-web",
-          backendCwd: "/dev/acme-api",
+          folders: [
+            { name: "Frontend", cwd: "/dev/acme-web" },
+            { name: "Backend", cwd: "/dev/acme-api" },
+          ],
           items: [
             { name: "editor", type: "app", launch: "code ." },
-            { name: "backend", type: "command", launch: "task runserver", side: "backend" },
+            { name: "backend", type: "command", launch: "task runserver", folderIndex: 1 },
             {
               name: "frontend",
               type: "command",
               launch: "npm run dev",
-              side: "frontend",
+              folderIndex: 0,
               cwd: "/custom/override",
               close: "pkill -f vite",
               delayMs: 500,
@@ -71,6 +72,68 @@ describe("config", () => {
 
     saveConfig(original);
     expect(loadConfig()).toEqual(original);
+  });
+
+  // The pre-N-folder schema (`layout: split`, `frontendCwd`/`backendCwd`,
+  // items' `side: "frontend"/"backend"`) is transparently upgraded on load,
+  // not just accepted-and-ignored — real users have this on disk already
+  // (a hand-built config predating the N-folder generalization), and
+  // loadConfig must never throw or silently drop their split setup.
+  test("loadConfig migrates the old fixed frontend/backend split schema into folders/folderIndex", () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: acme-app
+    layout: split
+    frontendCwd: /dev/acme-web
+    backendCwd: /dev/acme-api
+    items:
+      - name: editor
+        type: app
+        launch: code .
+      - name: frontend-dev
+        type: command
+        launch: npm run dev
+        side: frontend
+      - name: backend-dev
+        type: command
+        launch: task runserver
+        side: backend
+`,
+    );
+
+    const config = loadConfig();
+
+    expect(config.workspaces[0]).toEqual({
+      name: "acme-app",
+      folders: [
+        { name: "Frontend", cwd: "/dev/acme-web" },
+        { name: "Backend", cwd: "/dev/acme-api" },
+      ],
+      items: [
+        { name: "editor", type: "app", launch: "code ." },
+        { name: "frontend-dev", type: "command", launch: "npm run dev", folderIndex: 0 },
+        { name: "backend-dev", type: "command", launch: "task runserver", folderIndex: 1 },
+      ],
+    });
+  });
+
+  test("loadConfig strips a stray layout: single from an old single-folder workspace", () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "config.yaml"),
+      `workspaces:
+  - name: acme-api
+    layout: single
+    cwd: /dev/acme-api
+    items: []
+`,
+    );
+
+    const config = loadConfig();
+
+    expect(config.workspaces[0]).toEqual({ name: "acme-api", cwd: "/dev/acme-api", items: [] });
   });
 
   test("saveConfig writes to config.yaml under the config dir", () => {
@@ -110,6 +173,7 @@ describe("config", () => {
       autoPruneStaleSessions: false,
       autocomplete: false,
       shellIntegrationPrompted: false,
+      maxWorkspaceFolders: 6,
     });
   });
 
@@ -119,6 +183,7 @@ describe("config", () => {
       autoPruneStaleSessions: true,
       autocomplete: false,
       shellIntegrationPrompted: false,
+      maxWorkspaceFolders: 6,
     });
   });
 

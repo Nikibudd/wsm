@@ -4,12 +4,11 @@ import type { Key } from "ink";
 import { isValidCustomCommandName } from "../customCommands.js";
 import type {
   CustomCommand,
-  ItemSide,
   ItemType,
   Settings,
   Workspace,
+  WorkspaceFolder,
   WorkspaceItem,
-  WorkspaceLayout,
 } from "../types.js";
 import { useTheme } from "./ThemeContext.js";
 
@@ -24,6 +23,10 @@ export interface FieldDef {
   kind: "text" | "select" | "multiline";
   options?: FieldOption[];
   placeholder?: string;
+  /** Optional dim, non-blocking note rendered under this field's row (e.g. a
+   * live "this is experimental" warning) — distinct from `error`, which is
+   * form-wide and only appears after a failed submit. */
+  hint?: string;
 }
 
 // (key, updater) rather than (key, value): Ink can deliver several keypresses
@@ -322,94 +325,102 @@ export function Form({
         const focused = i === focusIndex;
         const value = values[f.key] ?? "";
         return (
-          <Box key={f.key}>
-            <Box width={16}>
-              <Text color={focused ? resolvedAccent : theme.border}>
-                {focused ? "› " : "  "}
-                {f.label}
-              </Text>
-            </Box>
-            <Box flexGrow={1}>
-              {f.kind === "text" ? (
-                focused ? (
-                  <Text color={theme.text}>
-                    {value || (f.placeholder ? "" : "")}
-                    <Text backgroundColor={theme.text} color={theme.selectionText}>
-                      {" "}
+          <Box key={f.key} flexDirection="column">
+            <Box>
+              <Box width={16}>
+                <Text color={focused ? resolvedAccent : theme.border}>
+                  {focused ? "› " : "  "}
+                  {f.label}
+                </Text>
+              </Box>
+              <Box flexGrow={1}>
+                {f.kind === "text" ? (
+                  focused ? (
+                    <Text color={theme.text}>
+                      {value || (f.placeholder ? "" : "")}
+                      <Text backgroundColor={theme.text} color={theme.selectionText}>
+                        {" "}
+                      </Text>
+                      {!value && f.placeholder ? <Text dimColor> {f.placeholder}</Text> : null}
                     </Text>
-                    {!value && f.placeholder ? <Text dimColor> {f.placeholder}</Text> : null}
-                  </Text>
-                ) : (
-                  <Text color={value ? theme.text : theme.border}>
-                    {value || f.placeholder || "—"}
-                  </Text>
-                )
-              ) : f.kind === "multiline" ? (
-                (() => {
-                  const editing = focused && multilineEditing;
-                  // Distinct color while actively editing, on top of the
-                  // cursor block — the whole point is a visible answer to
-                  // "am I currently typing into this, or just looking at
-                  // it," since enter/esc mean different things in each state.
-                  const valueColor = editing ? resolvedAccent : theme.text;
-                  const cursor = editing
-                    ? multilineCursorLineCol(value, multilineCursor.current)
-                    : null;
-                  return (
-                    <Box flexDirection="column">
-                      {value ? (
-                        value.split("\n").map((line, li) => {
-                          if (!cursor || li !== cursor.line) {
-                            // Ink drops a fully-empty <Text> row's height,
-                            // collapsing blank lines — a single space keeps
-                            // them visible without changing what's shown.
+                  ) : (
+                    <Text color={value ? theme.text : theme.border}>
+                      {value || f.placeholder || "—"}
+                    </Text>
+                  )
+                ) : f.kind === "multiline" ? (
+                  (() => {
+                    const editing = focused && multilineEditing;
+                    // Distinct color while actively editing, on top of the
+                    // cursor block — the whole point is a visible answer to
+                    // "am I currently typing into this, or just looking at
+                    // it," since enter/esc mean different things in each state.
+                    const valueColor = editing ? resolvedAccent : theme.text;
+                    const cursor = editing
+                      ? multilineCursorLineCol(value, multilineCursor.current)
+                      : null;
+                    return (
+                      <Box flexDirection="column">
+                        {value ? (
+                          value.split("\n").map((line, li) => {
+                            if (!cursor || li !== cursor.line) {
+                              // Ink drops a fully-empty <Text> row's height,
+                              // collapsing blank lines — a single space keeps
+                              // them visible without changing what's shown.
+                              return (
+                                <Text key={li} color={valueColor}>
+                                  {line || " "}
+                                </Text>
+                              );
+                            }
+                            // The line the cursor is on: highlight the
+                            // character it sits over (or a blank space, at
+                            // end of line) rather than always appending after
+                            // everything, now that the cursor can be
+                            // anywhere in the value, not just at the end.
+                            const before = line.slice(0, cursor.col);
+                            const at = line[cursor.col] ?? " ";
+                            const after = line.slice(cursor.col + 1);
                             return (
                               <Text key={li} color={valueColor}>
-                                {line || " "}
+                                {before}
+                                <Text backgroundColor={valueColor} color={theme.selectionText}>
+                                  {at}
+                                </Text>
+                                {after}
                               </Text>
                             );
-                          }
-                          // The line the cursor is on: highlight the
-                          // character it sits over (or a blank space, at
-                          // end of line) rather than always appending after
-                          // everything, now that the cursor can be
-                          // anywhere in the value, not just at the end.
-                          const before = line.slice(0, cursor.col);
-                          const at = line[cursor.col] ?? " ";
-                          const after = line.slice(cursor.col + 1);
-                          return (
-                            <Text key={li} color={valueColor}>
-                              {before}
+                          })
+                        ) : (
+                          <Text color={focused ? valueColor : theme.border}>
+                            {editing ? (
                               <Text backgroundColor={valueColor} color={theme.selectionText}>
-                                {at}
+                                {" "}
                               </Text>
-                              {after}
-                            </Text>
-                          );
-                        })
-                      ) : (
-                        <Text color={focused ? valueColor : theme.border}>
-                          {editing ? (
-                            <Text backgroundColor={valueColor} color={theme.selectionText}>
-                              {" "}
-                            </Text>
-                          ) : null}
-                          {f.placeholder ? (
-                            <Text dimColor>{focused ? ` ${f.placeholder}` : f.placeholder}</Text>
-                          ) : focused ? null : (
-                            "—"
-                          )}
-                        </Text>
-                      )}
-                    </Box>
-                  );
-                })()
-              ) : (
-                <Text color={focused ? resolvedAccent : theme.text}>
-                  ‹ {f.options?.find((o) => o.value === value)?.label ?? value} ›
-                </Text>
-              )}
+                            ) : null}
+                            {f.placeholder ? (
+                              <Text dimColor>{focused ? ` ${f.placeholder}` : f.placeholder}</Text>
+                            ) : focused ? null : (
+                              "—"
+                            )}
+                          </Text>
+                        )}
+                      </Box>
+                    );
+                  })()
+                ) : (
+                  <Text color={focused ? resolvedAccent : theme.text}>
+                    ‹ {f.options?.find((o) => o.value === value)?.label ?? value} ›
+                  </Text>
+                )}
+              </Box>
             </Box>
+            {f.hint ? (
+              <Text dimColor>
+                {"  "}
+                {f.hint}
+              </Text>
+            ) : null}
           </Box>
         );
       })}
@@ -433,22 +444,24 @@ export function Form({
 
 export function ItemForm({
   existing,
-  isSplit,
-  presetSide,
+  folders,
+  presetFolderIndex,
   onSubmit,
   onCancel,
 }: {
   existing?: WorkspaceItem;
-  isSplit: boolean;
-  presetSide?: ItemSide;
+  /** The workspace's folders — 0 or 1 entries means "not split" (no Folder field shown). */
+  folders: WorkspaceFolder[];
+  presetFolderIndex?: number;
   onSubmit: (item: WorkspaceItem) => void;
   onCancel: () => void;
 }) {
+  const isSplit = folders.length > 1;
   const [values, setValues] = useState<Record<string, string>>({
     name: existing?.name ?? "",
     type: existing?.type ?? "app",
     launch: existing?.launch ?? "",
-    side: existing?.side ?? presetSide ?? "frontend",
+    folderIndex: String(existing?.folderIndex ?? presetFolderIndex ?? 0),
     cwd: existing?.cwd ?? "",
     closeStrategy: existing?.close ? "command" : existing ? "none" : "process",
     closeCommand: existing?.close ?? "",
@@ -478,20 +491,17 @@ export function ItemForm({
     ];
     if (isSplit) {
       base.push({
-        key: "side",
-        label: "Side",
+        key: "folderIndex",
+        label: "Folder",
         kind: "select",
-        options: [
-          { label: "Frontend", value: "frontend" },
-          { label: "Backend", value: "backend" },
-        ],
+        options: folders.map((f, i) => ({ label: f.name, value: String(i) })),
       });
     }
     base.push({
       key: "cwd",
       label: "Directory",
       kind: "text",
-      placeholder: isSplit ? "(frontend/backend default)" : "(workspace default)",
+      placeholder: isSplit ? "(folder default)" : "(workspace default)",
     });
     base.push({
       key: "closeStrategy",
@@ -519,7 +529,7 @@ export function ItemForm({
       placeholder: 'optional, e.g. "container" — see wsm open/close <name> <tag>',
     });
     return base;
-  }, [values.type, values.closeStrategy, isSplit]);
+  }, [values.type, values.closeStrategy, isSplit, folders]);
 
   const handleSubmit = () => {
     if (!values.name.trim()) {
@@ -539,7 +549,7 @@ export function ItemForm({
       type: values.type as ItemType,
       launch: values.launch.trim(),
     };
-    if (isSplit) item.side = values.side as ItemSide;
+    if (isSplit) item.folderIndex = Number(values.folderIndex);
     if (values.cwd.trim()) item.cwd = values.cwd.trim();
     if (values.closeStrategy === "command" && values.closeCommand.trim()) {
       item.close = values.closeCommand.trim();
@@ -566,13 +576,30 @@ export function ItemForm({
   );
 }
 
+// Default cap on how many project folders a workspace can be split into,
+// used as the Settings tab's "Max folders" default and as the fallback
+// when no setting has been loaded yet. Editable per the "maxWorkspaceFolders"
+// setting (see SettingsForm below); values above this are accepted but
+// flagged "experimental" there, since the items pane's per-folder columns
+// get narrower with each one and haven't been verified to render well past
+// this. `ABSOLUTE_MAX_WORKSPACE_FOLDERS` is a hard ceiling regardless of the
+// setting, purely to stop a stray keystroke from generating an unbounded
+// number of form fields.
+export const DEFAULT_MAX_WORKSPACE_FOLDERS = 6;
+export const ABSOLUTE_MAX_WORKSPACE_FOLDERS = 20;
+
+function parseFolderCountForFields(raw: string, maxFolders: number): number {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, maxFolders);
+}
+
 export interface WorkspaceFormResult {
   name: string;
   group: string;
-  layout: WorkspaceLayout;
   cwd: string;
-  frontendCwd: string;
-  backendCwd: string;
+  /** Empty means "not split" (use `cwd`); 2+ named folders otherwise. */
+  folders: WorkspaceFolder[];
 }
 
 export function WorkspaceForm({
@@ -582,6 +609,7 @@ export function WorkspaceForm({
   initialValues,
   title,
   submitLabel = "save",
+  maxFolders = DEFAULT_MAX_WORKSPACE_FOLDERS,
   onSubmit,
   onCancel,
 }: {
@@ -592,43 +620,64 @@ export function WorkspaceForm({
   initialValues?: Partial<WorkspaceFormResult>;
   title?: string;
   submitLabel?: string;
+  /** The effective cap — Settings' `maxWorkspaceFolders`, resolved by the caller (App.tsx), not read from config here. */
+  maxFolders?: number;
   onSubmit: (result: WorkspaceFormResult) => void;
   onCancel: () => void;
 }) {
-  const [values, setValues] = useState<Record<string, string>>({
-    group: existing?.group ?? initialValues?.group ?? presetGroup ?? "",
-    name: existing?.name ?? initialValues?.name ?? "",
-    layout: existing?.layout ?? initialValues?.layout ?? "single",
-    cwd: existing?.cwd ?? initialValues?.cwd ?? "",
-    frontendCwd: existing?.frontendCwd ?? initialValues?.frontendCwd ?? "",
-    backendCwd: existing?.backendCwd ?? initialValues?.backendCwd ?? "",
+  const effectiveMax = Math.min(Math.max(maxFolders, 1), ABSOLUTE_MAX_WORKSPACE_FOLDERS);
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const seedFolders = existing?.folders ?? initialValues?.folders ?? [];
+    const v: Record<string, string> = {
+      group: existing?.group ?? initialValues?.group ?? presetGroup ?? "",
+      name: existing?.name ?? initialValues?.name ?? "",
+      folderCount: String(seedFolders.length > 0 ? seedFolders.length : 1),
+      cwd: existing?.cwd ?? initialValues?.cwd ?? "",
+    };
+    for (let i = 0; i < ABSOLUTE_MAX_WORKSPACE_FOLDERS; i++) {
+      const folder = seedFolders[i];
+      // The first two folders default to "Frontend"/"Backend" the moment
+      // the count goes above 1, even with no seed data yet — continuity
+      // with what used to be the only two-way split this form offered.
+      // Anything past that has no universal name to guess, so it's left
+      // blank (just a placeholder hint) until the user types one.
+      v[`folderName${i}`] = folder?.name ?? (i === 0 ? "Frontend" : i === 1 ? "Backend" : "");
+      v[`folderCwd${i}`] = folder?.cwd ?? "";
+    }
+    return v;
   });
   const [error, setError] = useState("");
+
+  const folderCount = parseFolderCountForFields(values.folderCount ?? "1", effectiveMax);
 
   const fields = useMemo<FieldDef[]>(() => {
     const base: FieldDef[] = [
       { key: "group", label: "Group", kind: "text", placeholder: "e.g. Work (blank = Ungrouped)" },
       { key: "name", label: "Name", kind: "text", placeholder: "e.g. acme-api" },
       {
-        key: "layout",
-        label: "Layout",
-        kind: "select",
-        options: [
-          { label: "Single project folder", value: "single" },
-          { label: "Split frontend/backend", value: "split" },
-        ],
+        key: "folderCount",
+        label: "Folders",
+        kind: "text",
+        placeholder: `1 (default) - ${effectiveMax}, e.g. 2 for frontend+backend`,
       },
     ];
-    if (values.layout === "split") {
-      base.push(
-        { key: "frontendCwd", label: "Frontend dir", kind: "text", placeholder: "~/dev/acme-web" },
-        { key: "backendCwd", label: "Backend dir", kind: "text", placeholder: "~/dev/acme-api" },
-      );
+    if (folderCount > 1) {
+      for (let i = 0; i < folderCount; i++) {
+        base.push(
+          {
+            key: `folderName${i}`,
+            label: `Folder ${i + 1} name`,
+            kind: "text",
+            placeholder: i === 0 ? "Frontend" : i === 1 ? "Backend" : `Folder ${i + 1}`,
+          },
+          { key: `folderCwd${i}`, label: `Folder ${i + 1} dir`, kind: "text", placeholder: "~/dev/..." },
+        );
+      }
     } else {
       base.push({ key: "cwd", label: "Directory", kind: "text", placeholder: "~/dev/acme-api" });
     }
     return base;
-  }, [values.layout]);
+  }, [folderCount]);
 
   const handleSubmit = () => {
     const name = values.name.trim();
@@ -640,13 +689,43 @@ export function WorkspaceForm({
       setError("A workspace with that name already exists");
       return;
     }
+    const rawCount = (values.folderCount ?? "1").trim();
+    if (!/^[1-9]\d*$/.test(rawCount)) {
+      setError("Folders must be a positive number");
+      return;
+    }
+    const count = parseInt(rawCount, 10);
+    if (count > effectiveMax) {
+      setError(
+        effectiveMax === DEFAULT_MAX_WORKSPACE_FOLDERS
+          ? `At most ${effectiveMax} folders (raise "Max folders" in Settings for more)`
+          : `At most ${effectiveMax} folders`,
+      );
+      return;
+    }
+
+    const folders: WorkspaceFolder[] = [];
+    if (count > 1) {
+      for (let i = 0; i < count; i++) {
+        const folderName = (values[`folderName${i}`] ?? "").trim();
+        if (!folderName) {
+          setError(`Folder ${i + 1} needs a name`);
+          return;
+        }
+        folders.push({ name: folderName, cwd: (values[`folderCwd${i}`] ?? "").trim() || undefined });
+      }
+      const names = new Set(folders.map((f) => f.name));
+      if (names.size !== folders.length) {
+        setError("Folder names must be unique");
+        return;
+      }
+    }
+
     onSubmit({
       name,
       group: values.group.trim(),
-      layout: values.layout as WorkspaceLayout,
       cwd: values.cwd.trim(),
-      frontendCwd: values.frontendCwd.trim(),
-      backendCwd: values.backendCwd.trim(),
+      folders,
     });
   };
 
@@ -699,8 +778,12 @@ export function SettingsForm({
     defaultClose: existing.defaultClose ? "close" : "keep",
     autoPruneStaleSessions: existing.autoPruneStaleSessions ? "on" : "off",
     autocomplete: existing.autocomplete ? "on" : "off",
+    maxWorkspaceFolders: String(existing.maxWorkspaceFolders || DEFAULT_MAX_WORKSPACE_FOLDERS),
     theme: activeTheme,
   });
+  const [error, setError] = useState("");
+
+  const maxFoldersNum = parseInt(values.maxWorkspaceFolders, 10);
 
   const fields: FieldDef[] = [
     {
@@ -735,6 +818,16 @@ export function SettingsForm({
         ]
       : []),
     {
+      key: "maxWorkspaceFolders",
+      label: "Max folders",
+      kind: "text",
+      placeholder: String(DEFAULT_MAX_WORKSPACE_FOLDERS),
+      hint:
+        Number.isFinite(maxFoldersNum) && maxFoldersNum > DEFAULT_MAX_WORKSPACE_FOLDERS
+          ? `⚠ experimental above ${DEFAULT_MAX_WORKSPACE_FOLDERS} — the items pane's per-folder columns may not render well with this many`
+          : undefined,
+    },
+    {
       key: "theme",
       label: "Theme",
       kind: "select",
@@ -743,12 +836,18 @@ export function SettingsForm({
   ];
 
   const handleSubmit = () => {
+    const rawMaxFolders = values.maxWorkspaceFolders.trim();
+    if (!/^[1-9]\d*$/.test(rawMaxFolders)) {
+      setError("Max folders must be a positive number");
+      return;
+    }
     onSubmit({
       settings: {
         defaultClose: values.defaultClose === "close",
         autoPruneStaleSessions: values.autoPruneStaleSessions === "on",
         autocomplete: completionAvailable ? values.autocomplete === "on" : existing.autocomplete,
         shellIntegrationPrompted: existing.shellIntegrationPrompted,
+        maxWorkspaceFolders: Math.min(parseInt(rawMaxFolders, 10), ABSOLUTE_MAX_WORKSPACE_FOLDERS),
       },
       theme: values.theme,
     });
@@ -759,16 +858,18 @@ export function SettingsForm({
       title="Settings"
       fields={fields}
       values={values}
+      error={error}
       submitLabel="save"
       fullScreen={fullScreen}
       height={height}
-      onChange={(k, updater) =>
+      onChange={(k, updater) => {
+        setError("");
         setValues((prev) => {
           const next = { ...prev, [k]: updater(prev[k] ?? "") };
           if (k === "theme" && next.theme !== prev.theme) onPreviewTheme(next.theme);
           return next;
-        })
-      }
+        });
+      }}
       onSubmit={handleSubmit}
       onCancel={onCancel}
     />

@@ -7,9 +7,10 @@ import type { Session, SessionItem, State, Workspace, WorkspaceItem } from "./ty
 
 function resolveCwd(workspace: Workspace, item: WorkspaceItem): string {
   if (item.cwd) return expandHome(item.cwd);
-  if (workspace.layout === "split") {
-    const sideCwd = item.side === "frontend" ? workspace.frontendCwd : workspace.backendCwd;
-    return expandHome(sideCwd ?? "~");
+  const folders = workspace.folders ?? [];
+  if (folders.length > 1) {
+    const folder = folders[item.folderIndex ?? 0] ?? folders[0]!;
+    return expandHome(folder.cwd ?? "~");
   }
   return expandHome(workspace.cwd ?? "~");
 }

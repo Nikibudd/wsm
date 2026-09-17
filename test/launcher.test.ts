@@ -92,18 +92,19 @@ describe("launcher", () => {
     expect(options.stdio[0]).toBe("ignore");
   });
 
-  test("resolves cwd with priority: item.cwd > split side dir > workspace cwd", async () => {
+  test("resolves cwd with priority: item.cwd > assigned folder dir > workspace cwd", async () => {
     seedConfig({
       workspaces: [
         {
           name: "split-app",
-          layout: "split",
-          frontendCwd: "/tmp/fe",
-          backendCwd: "/tmp/be",
+          folders: [
+            { name: "Frontend", cwd: "/tmp/fe" },
+            { name: "Backend", cwd: "/tmp/be" },
+          ],
           items: [
-            { name: "fe-item", type: "command", launch: "npm run dev", side: "frontend" },
-            { name: "be-item", type: "command", launch: "task runserver", side: "backend" },
-            { name: "override", type: "command", launch: "echo hi", side: "backend", cwd: "/tmp/explicit" },
+            { name: "fe-item", type: "command", launch: "npm run dev", folderIndex: 0 },
+            { name: "be-item", type: "command", launch: "task runserver", folderIndex: 1 },
+            { name: "override", type: "command", launch: "echo hi", folderIndex: 1, cwd: "/tmp/explicit" },
           ],
         },
       ],
@@ -113,6 +114,31 @@ describe("launcher", () => {
 
     const cwds = spawnMock.mock.calls.map((call: any) => call[2].cwd);
     expect(cwds).toEqual(["/tmp/fe", "/tmp/be", "/tmp/explicit"]);
+  });
+
+  test("resolves cwd across more than two folders", async () => {
+    seedConfig({
+      workspaces: [
+        {
+          name: "multi-app",
+          folders: [
+            { name: "Frontend", cwd: "/tmp/fe" },
+            { name: "Backend 1", cwd: "/tmp/be1" },
+            { name: "Backend 2", cwd: "/tmp/be2" },
+          ],
+          items: [
+            { name: "fe", type: "command", launch: "npm run dev", folderIndex: 0 },
+            { name: "be1", type: "command", launch: "task runserver", folderIndex: 1 },
+            { name: "be2", type: "command", launch: "task runserver", folderIndex: 2 },
+          ],
+        },
+      ],
+    });
+
+    await launcher.openWorkspace("multi-app", {});
+
+    const cwds = spawnMock.mock.calls.map((call: any) => call[2].cwd);
+    expect(cwds).toEqual(["/tmp/fe", "/tmp/be1", "/tmp/be2"]);
   });
 
   test("openWorkspace throws a clear error for an unknown workspace name", async () => {
