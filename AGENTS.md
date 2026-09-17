@@ -101,10 +101,19 @@ test/            jest, mirrors src/ one file per module + app.test.tsx for the T
 ```
 
 A workspace is a group of **items** (apps to launch or shell commands to run)
-sharing a project folder. A workspace can instead be **split** into separate
-frontend/backend folders (`layout: "split"`, `frontendCwd`/`backendCwd`),
-in which case each item picks a `side`. Single-folder is always the default;
-`layout` is omitted from saved config entirely unless split is chosen.
+sharing a project folder. A workspace can instead be **split** across any
+number of named project folders (`Workspace.folders: WorkspaceFolder[]`,
+each `{ name, cwd? }`) — a frontend+backend pair, or more (frontend + two
+backend services, etc.) — in which case each item picks one via
+`folderIndex` (an index into `folders`). Single-folder is always the
+default; `folders` is omitted from saved config entirely unless there are 2
+or more (`WorkspaceForm`'s "Folders" count field, default `1`) — "how many
+folders" is derived purely from that array's length, there's no separate
+`layout`/flag to keep in sync with it (an earlier, fixed two-way version of
+this — `layout: "split"`, `frontendCwd`/`backendCwd`, item `side:
+"frontend"|"backend"` — was generalized into this; see "N-folder splits"
+under Lessons learned for the design and the migration that keeps old
+configs working).
 
 An item can also carry an optional free-form `tag` (`ItemForm`'s "Tag"
 field, last in the field list, blank/omitted by default) so a subset of a
@@ -927,6 +936,59 @@ the log capture being broken.
   `close` commands) concluded the pid is cosmetic once `close` is set —
   `close` doesn't consult it at all — so there was nothing to preserve here
   beyond what `openWorkspace` already does for a full open.
+
+- **N-folder splits generalize what used to be a fixed, two-way
+  frontend/backend split — and every item references its folder by
+  *index*, not by name, specifically so renaming a folder is free.**
+  `Workspace.folders: WorkspaceFolder[]` (each `{ name, cwd? }`) replaced
+  `layout: "split"` + `frontendCwd`/`backendCwd`; `WorkspaceItem.folderIndex`
+  replaced `side: "frontend" | "backend"`. Index-based reference was a
+  deliberate choice over matching by folder name: `WorkspaceForm`'s folder
+  fields are positional (`Folder 1 name`, `Folder 2 name`, ...), so if items
+  referenced folders by name, retyping a folder's name in the form would
+  silently orphan every item that pointed at the old name — with an index,
+  a rename is trivially free (nothing about the item changes), and only
+  *removing* folders needs any cleanup at all. `App.tsx`'s
+  `clampItemFolders` is that cleanup, run whenever `WorkspaceForm` saves:
+  any item whose `folderIndex` now points past the new (shorter) `folders`
+  array is clamped to the last valid index, and every item's `folderIndex`
+  is stripped entirely once a workspace is back down to a single folder
+  (mirroring how `folders` itself is never saved at length <= 1).
+  `groupItemsByFolder` (bucketing items into per-folder columns for
+  rendering) clamps the same way independently, so a stray out-of-range
+  index in a hand-edited config.yaml can't crash rendering even before a
+  save has had a chance to clean it up.
+
+  **Old configs are migrated transparently, not just accepted-and-ignored.**
+  `config.ts`'s `migrateWorkspace` (called from every `loadConfig()`, not a
+  one-time upgrade — there's no version flag, it just recognizes the old
+  shape by which fields are present) turns a legacy `layout: "split"`
+  workspace into `folders: [{name: "Frontend", cwd: frontendCwd}, {name:
+  "Backend", cwd: backendCwd}]` and remaps each item's `side` to the
+  matching `folderIndex` (0/1). This matters beyond the abstract: a real
+  workspace in this project's own `~/.config/workspace-manager/config.yaml`
+  (and the dev sandbox's sample `acme-web`) used the old schema when this
+  was built, confirmed via a real `wsmdev` run — opening the TUI against it
+  rendered the two folders correctly on first load, and the very next
+  `saveConfig` (the TUI's mount-time effect) rewrote the file in the new
+  shape on disk. A stray `layout: "single"` (or a workspace re-saved by a
+  newer wsm) is also stripped even when there's no split to migrate, so it
+  never lingers in config.yaml — `folders`' presence/length is the only
+  signal now, there's nothing else to keep consistent with it.
+
+  **`WorkspaceForm`'s folder count is configurable, not a hardcoded cap.**
+  `Settings.maxWorkspaceFolders` (default 6, `SettingsForm`'s "Max folders"
+  field) sets how high the workspace form's "Folders" field will accept —
+  raising it past the default shows a live, non-blocking `⚠ experimental`
+  note (via `FieldDef.hint`, a new optional per-field dim line under a
+  field's row, distinct from `Form`'s `error`, which is form-wide and only
+  appears after a failed submit) rather than being rejected, since going
+  past 6 hasn't been verified to render well (the items pane's per-folder
+  columns just get narrower with each one — there's no scrolling or
+  reflow). `ABSOLUTE_MAX_WORKSPACE_FOLDERS` (20, in `Form.tsx`) is a hard
+  ceiling regardless of the setting, purely so a stray keystroke in either
+  field can't generate an unbounded number of form fields — not something
+  the experimental warning is meant to gate past.
 
 - **`cli.ts` itself has no test file — it's just commander wiring.** Keep it
   that way: any actual logic a command needs (string building, script

@@ -180,26 +180,33 @@ Forms are keyboard-driven: `↑↓` between fields, `←→` to change a dropdow
 value, `enter` to move to the next field (or save on the last one), `esc` to
 cancel.
 
-### Single project folder vs. split frontend/backend
+### Single project folder vs. multiple
 
 By default a workspace has one project folder (`cwd`) that all its items
 launch in unless they set their own `Directory`. The workspace form's
-**Layout** field can be switched to "Split frontend/backend" instead, which
-replaces the single directory with a **Frontend dir** and **Backend dir** —
-each item then gets a **Side** field (Frontend/Backend) that picks which
-folder it runs in by default (still overridable per item via `Directory`).
-This only shows up once you opt in; single-folder stays the default for new
-and existing workspaces. When split, the items pane renders as two side-by-side
-columns (Frontend | Backend) instead of one list — `←→` switches between them
-(or exits back to the workspace list from the frontend column), `↑↓` moves
-within the focused column, and `a` adds an item to whichever column has focus.
+**Folders** field (default `1`) can be raised to split a workspace across
+that many named project folders instead — `2` for a frontend+backend split,
+`3` for frontend + two backend services, and so on (up to a configurable
+cap — 6 by default, see the Settings tab below). Raising it reveals a
+**Folder N name**/**Folder N dir** pair per folder (the first two default to
+"Frontend"/"Backend", continuing what used to be the only split this form
+offered; anything past that starts blank) — each item then gets a **Folder**
+field that picks which one it runs in by default (still overridable per item
+via `Directory`). This only shows up once you raise the count past 1;
+single-folder stays the default for new and existing workspaces. When split,
+the items pane renders one column per folder instead of a single list —
+`←→` switches between them (or exits back to the workspace list from the
+first column), `↑↓` moves within the focused column, and `a` adds an item to
+whichever column has focus.
 
 ```yaml
 workspaces:
   - name: acme-app
-    layout: split
-    frontendCwd: ~/dev/acme-web
-    backendCwd: ~/dev/acme-api
+    folders:
+      - name: Frontend
+        cwd: ~/dev/acme-web
+      - name: Backend
+        cwd: ~/dev/acme-api
     items:
       - name: editor
         type: app
@@ -208,12 +215,22 @@ workspaces:
       - name: frontend dev server
         type: command
         launch: npm run dev
-        side: frontend
+        folderIndex: 0
       - name: backend dev server
         type: command
         launch: task runserver
-        side: backend
+        folderIndex: 1
 ```
+
+The Settings tab (press `3`) has a **Max folders** field (default `6`)
+raising the cap the Folders field above accepts — values past 6 are accepted
+but flagged experimental, since the items pane hasn't been verified to
+render well with that many side-by-side columns.
+
+Configs written before this generalization (a fixed two-way
+`layout: split`/`frontendCwd`/`backendCwd`/item `side: frontend`|`backend`)
+still load correctly — they're transparently upgraded to the `folders`/
+`folderIndex` shape above the moment they're read, no hand-editing needed.
 
 Config lives at `~/.config/workspace-manager/config.yaml` and can be hand
 edited too. Example:
